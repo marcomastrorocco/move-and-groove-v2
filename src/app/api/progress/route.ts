@@ -225,6 +225,29 @@ async function countCompletedWorkoutsToday(
   return count || 0
 }
 
+// Pro accounts bypass the routine-generation cap in /api/routines/generate,
+// so the completion cap has to honour the same entitlement or a Pro user can
+// generate routines they are then blocked from logging. Mirrors the tolerance
+// there too: some projects never provisioned the legacy profiles table, and a
+// missing table must not change enforcement for anyone else.
+async function readIsProFlag(
+  progressClient: ReturnType<typeof createAccessTokenClient>,
+  userId: string,
+) {
+  const { data, error } = await progressClient
+    .from('profiles')
+    .select('is_pro')
+    .eq('id', userId)
+    .maybeSingle<{ is_pro?: boolean | null }>()
+
+  if (error) {
+    console.warn('[progress.profile]', error.message)
+    return false
+  }
+
+  return Boolean(data?.is_pro)
+}
+
 async function insertProgressRow(
   progressClient: ReturnType<typeof createAccessTokenClient> | ReturnType<typeof createServiceRoleClient>,
   baseRow: ProgressWriteRow,
@@ -331,8 +354,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, mode: 'existing', id: existingId })
     }
 
-    const completedWorkoutsToday = await countCompletedWorkoutsToday(progressClient, userId)
-    if (completedWorkoutsToday >= DAILY_WORKOUT_LIMIT) {
+    const [completedWorkoutsToday, isPro] = await Promise.all([
+      countCompletedWorkoutsToday(progressClient, userId),
+      readIsProFlag(progressClient, userId),
+    ])
+    if (!isPro && completedWorkoutsToday >= DAILY_WORKOUT_LIMIT) {
       return NextResponse.json(
         { error: 'DAILY_WORKOUT_LIMIT_REACHED', message: 'You have already completed today\'s two workouts.' },
         { status: 429 },
