@@ -733,24 +733,24 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <div style={{ display: 'grid', justifyItems: 'end', gap: 4 }}>
-                        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, letterSpacing: 3, color: 'var(--silver4)', textTransform: UC }}>
+                        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 2.5, color: 'var(--silver2)', textTransform: UC }}>
                           This Week
                         </div>
-                        <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 18, fontWeight: 700, letterSpacing: 2, color: 'var(--cyan)' }}>
+                        <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 20, fontWeight: 700, letterSpacing: 2, color: 'var(--cyan)' }}>
                           {weeklyMinutesTotal} MIN
                         </div>
                       </div>
                     </div>
                     <div style={{ border: '1px solid rgba(139,231,255,0.14)', background: 'linear-gradient(180deg, rgba(14,18,24,0.98) 0%, rgba(6,8,12,0.98) 100%)', padding: '16px 16px 14px', marginBottom: 14, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-                        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 3, color: 'var(--silver3)', textTransform: UC }}>
+                        <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, letterSpacing: 2.5, color: 'var(--silver2)', textTransform: UC }}>
                           Daily workout allowance
                         </div>
-                        <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 12, fontWeight: 700, letterSpacing: 2, color: 'var(--cyan)' }}>
+                        <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 1.5, color: 'var(--cyan)' }}>
                           PEAK {weeklyPeak} / {DAILY_MINUTE_LIMIT} MIN
                         </div>
                       </div>
-                      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, letterSpacing: 1.5, color: 'var(--silver4)', marginBottom: 12, textTransform: UC }}>
+                      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 1, color: 'var(--silver3)', marginBottom: 12, textTransform: UC }}>
                         {LOAD_INCREMENT_MINUTES} MIN PER BLOCK · MAX {DAILY_WORKOUT_LIMIT} WORKOUTS × {WORKOUT_MINUTE_LIMIT} MIN
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gap: 8, alignItems: 'end', minHeight: 132 }}>
@@ -767,10 +767,10 @@ export default function DashboardPage() {
                                 )
                               })}
                             </div>
-                            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, letterSpacing: 2, color: 'var(--silver4)', textTransform: UC, marginBottom: 4 }}>
+                            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 'clamp(9px,2.2vw,11px)', letterSpacing: 1.5, color: 'var(--silver2)', textTransform: UC, marginBottom: 5 }}>
                               {label}
                             </div>
-                            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 1.5, color: weeklyMinutes[index] > 0 ? 'var(--silver2)' : 'var(--silver4)' }}>
+                            <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 'clamp(10px,2.6vw,13px)', letterSpacing: 0.3, color: weeklyMinutes[index] > 0 ? 'var(--white)' : 'var(--silver3)', whiteSpace: 'nowrap' }}>
                               {displayedWeeklyMinutes[index]} / {DAILY_MINUTE_LIMIT}
                             </div>
                           </div>
@@ -784,13 +784,13 @@ export default function DashboardPage() {
                         { label: 'Current Focus', value: latestRoutineFocus, sub: latestRoutine ? latestRoutine.title : 'Generate your next routine' },
                       ].map((item) => (
                         <div key={item.label} style={{ background: 'linear-gradient(180deg, rgba(255,255,255,0.028) 0%, rgba(10,12,16,0.98) 100%)', border: '1px solid rgba(255,255,255,0.06)', padding: '14px 14px 13px', boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.03)' }}>
-                          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 8, letterSpacing: 3, color: 'var(--silver4)', textTransform: UC, marginBottom: 8 }}>
+                          <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 2.5, color: 'var(--silver2)', textTransform: UC, marginBottom: 8 }}>
                             {item.label}
                           </div>
-                          <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: item.label === 'Current Focus' ? 13 : 16, fontWeight: 700, letterSpacing: 2, color: item.label === 'Current Focus' ? 'var(--white)' : 'var(--cyan)', lineHeight: 1.35, marginBottom: 6 }}>
+                          <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: item.label === 'Current Focus' ? 15 : 18, fontWeight: 700, letterSpacing: 1.5, color: item.label === 'Current Focus' ? 'var(--white)' : 'var(--cyan)', lineHeight: 1.35, marginBottom: 6 }}>
                             {item.value}
                           </div>
-                          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 12, color: 'var(--silver3)', lineHeight: 1.55 }}>
+                          <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: 'var(--silver2)', lineHeight: 1.55 }}>
                             {item.sub}
                           </div>
                         </div>
