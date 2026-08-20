@@ -42,7 +42,7 @@ interface WorkoutPlan {
 }
 
 const WORKOUT_MINUTE_LIMIT = 45
-const LOAD_INCREMENT_MINUTES = 15
+const LOAD_SEGMENT_COUNT = 6
 
 interface PendingRoutineMeta {
   sport?: string | null
@@ -424,7 +424,7 @@ export default function DashboardPage() {
     : 'No screening saved yet'
   const weeklyLabels = getLastSevenDayLabels()
   const dailyMinuteLimit = dailyWorkoutLimit * WORKOUT_MINUTE_LIMIT
-  const loadSegments = Math.ceil(dailyMinuteLimit / LOAD_INCREMENT_MINUTES)
+  const minutesPerSegment = dailyMinuteLimit / LOAD_SEGMENT_COUNT
   const displayedWeeklyMinutes = weeklyMinutes.map((value) => Math.min(value, dailyMinuteLimit))
   const weeklyMinutesTotal = displayedWeeklyMinutes.reduce((sum, value) => sum + value, 0)
   const weeklyActiveDays = displayedWeeklyMinutes.filter((value) => value > 0).length
@@ -760,15 +760,15 @@ export default function DashboardPage() {
                         </div>
                       </div>
                       <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 1, color: 'var(--silver3)', marginBottom: 12, textTransform: UC }}>
-                        {LOAD_INCREMENT_MINUTES} MIN PER BLOCK · MAX {dailyWorkoutLimit} WORKOUTS × {WORKOUT_MINUTE_LIMIT} MIN
+                        {Math.round(minutesPerSegment)} MIN PER BLOCK · MAX {dailyWorkoutLimit} WORKOUTS × {WORKOUT_MINUTE_LIMIT} MIN
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gap: 8, alignItems: 'end', minHeight: 132 }}>
                         {weeklyLabels.map((label, index) => (
                           <div key={label} style={{ textAlign: 'center' }}>
-                            <div style={{ height: 88, display: 'flex', flexDirection: 'column-reverse', alignItems: 'center', justifyContent: 'flex-start', gap: 3, marginBottom: 8 }}>
-                              {Array.from({ length: loadSegments }, (_, segment) => {
-                                const segmentMinutes = Math.max(0, Math.min(LOAD_INCREMENT_MINUTES, displayedWeeklyMinutes[index] - segment * LOAD_INCREMENT_MINUTES))
-                                const fillPercent = (segmentMinutes / LOAD_INCREMENT_MINUTES) * 100
+                            <div style={{ height: 88, overflow: 'hidden', display: 'flex', flexDirection: 'column-reverse', alignItems: 'center', justifyContent: 'flex-start', gap: 3, marginBottom: 8 }}>
+                              {Array.from({ length: LOAD_SEGMENT_COUNT }, (_, segment) => {
+                                const segmentMinutes = Math.max(0, Math.min(minutesPerSegment, displayedWeeklyMinutes[index] - segment * minutesPerSegment))
+                                const fillPercent = minutesPerSegment > 0 ? (segmentMinutes / minutesPerSegment) * 100 : 0
                                 return (
                                   <div key={segment} style={{ width: 18, height: 12, padding: 1, background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(139,231,255,0.16)' }}>
                                     <div style={{ height: '100%', width: `${fillPercent}%`, background: 'linear-gradient(90deg, rgba(0,180,216,0.58), rgba(139,231,255,0.98))', boxShadow: fillPercent > 0 ? '0 0 10px rgba(139,231,255,0.22)' : 'none' }} />
