@@ -1,6 +1,6 @@
 ﻿'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import PostSessionCheckinModal from '@/components/PostSessionCheckinModal'
@@ -472,12 +472,26 @@ export default function RoutinePage() {
     }
   }, [routine, supabase])
 
+  // The auto-log must fire once per finished session. loggingProgress is one of
+  // the effect's dependencies, so a failed attempt flips it back to false and
+  // re-triggers the effect, which retries forever - visible as the error text
+  // flickering while /api/progress is called in a loop. Hitting the daily cap is
+  // an ordinary outcome, not a transient fault, so there is nothing to retry.
+  // The "log progress" button below still allows a deliberate retry.
+  const autoLoggedSessionRef = useRef(false)
+
   useEffect(() => {
     async function saveWorkoutProgressOnly() {
-      if (!sessionFinished || !routine || progressSaved || loggingProgress) {
+      if (!sessionFinished) {
+        autoLoggedSessionRef.current = false
         return
       }
 
+      if (!routine || progressSaved || loggingProgress || autoLoggedSessionRef.current) {
+        return
+      }
+
+      autoLoggedSessionRef.current = true
       await logCompletedSessionProgress()
     }
 
