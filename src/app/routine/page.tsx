@@ -368,6 +368,7 @@ export default function RoutinePage() {
   const [progressSaved, setProgressSaved] = useState(false)
   const [progressSaveError, setProgressSaveError] = useState('')
   const [loggingProgress, setLoggingProgress] = useState(false)
+  const [progressCapped, setProgressCapped] = useState(false)
   const [postSessionCompleted, setPostSessionCompleted] = useState(false)
   const [postSessionDismissed, setPostSessionDismissed] = useState(false)
 
@@ -407,6 +408,7 @@ export default function RoutinePage() {
 
     setLoggingProgress(true)
     setProgressSaveError('')
+    setProgressCapped(false)
 
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -449,6 +451,7 @@ export default function RoutinePage() {
         // the machine code with human-readable copy, so surface that instead of
         // showing the caller DAILY_WORKOUT_LIMIT_REACHED.
         if (payload?.error === 'DAILY_WORKOUT_LIMIT_REACHED') {
+          setProgressCapped(true)
           throw new Error(payload?.message || 'You have already logged both workouts for today. Your next one counts tomorrow.')
         }
         throw new Error(payload?.error || 'Could not log completed session progress.')
@@ -1160,21 +1163,23 @@ export default function RoutinePage() {
                     {'// Session Saved'}
                   </div>
                   <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 16, fontWeight: 700, letterSpacing: 3, color: 'var(--white)', marginBottom: 10, textTransform: 'uppercase' }}>
-                    {progressSaved ? 'WORKOUT COUNTED IN YOUR STATS' : loggingProgress ? 'SAVING WORKOUT PROGRESS...' : 'WORKOUT PROGRESS NEEDS RETRY'}
+                    {progressSaved ? 'WORKOUT COUNTED IN YOUR STATS' : loggingProgress ? 'SAVING WORKOUT PROGRESS...' : progressCapped ? 'DAILY WORKOUT LIMIT REACHED' : 'WORKOUT PROGRESS NEEDS RETRY'}
                   </div>
                   <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 15, color: 'var(--silver2)', lineHeight: 1.75, marginBottom: 14 }}>
                     {progressSaved
                       ? 'Your workout duration has already been fed into your dashboard stats and weekly summary. The questionnaire is a separate feedback step.'
                       : loggingProgress
                         ? 'We are saving this workout into your progress history now before opening the questionnaire.'
-                        : 'The workout itself needs to save successfully before the questionnaire step. Retry this save first so the dashboard and weekly stats update correctly.'}
+                        : progressCapped
+                          ? 'You finished the session, but both workout slots for today are already counted, so this one will not be added to your stats. Your next workout counts tomorrow, and the check-in below is still open.'
+                          : 'The workout itself needs to save successfully before the questionnaire step. Retry this save first so the dashboard and weekly stats update correctly.'}
                   </div>
                   {progressSaveError && (
                     <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: '#ffb7b7', lineHeight: 1.6, marginBottom: 12 }}>
                       {progressSaveError}
                     </div>
                   )}
-                  {!progressSaved && (
+                  {!progressSaved && !progressCapped && (
                   <button className="btn-primary" onClick={() => { void logCompletedSessionProgress().then((ok) => { if (ok) { setPostSessionDismissed(false); setShowPostSessionModal(true) } }) }} disabled={loggingProgress}>
                     {loggingProgress ? 'SAVING WORKOUT...' : 'SAVE WORKOUT TO STATS'}
                   </button>
@@ -1210,7 +1215,7 @@ export default function RoutinePage() {
                   )}
                 </div>
                 <div>
-                  <button className="btn-primary" onClick={() => { setPostSessionDismissed(false); setShowPostSessionModal(true) }} disabled={!progressSaved}>
+                  <button className="btn-primary" onClick={() => { setPostSessionDismissed(false); setShowPostSessionModal(true) }} disabled={!progressSaved && !progressCapped}>
                     {postSessionCompleted ? 'POST SESSION CHECK-IN SAVED' : postSessionDismissed ? 'REOPEN OPTIONAL POST SESSION CHECK-IN' : 'OPEN OPTIONAL POST SESSION CHECK-IN'}
                   </button>
                 </div>
