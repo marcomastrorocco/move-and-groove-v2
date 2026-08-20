@@ -41,6 +41,7 @@ alter table public.progress
   add constraint progress_duration_minutes_check
   check (duration_minutes > 0 and duration_minutes <= 45);
 
+alter table public.progress add column if not exists created_at timestamptz not null default now();
 alter table public.progress add column if not exists routine_id bigint references public.routines(id) on delete set null;
 alter table public.progress add column if not exists completed_at timestamptz not null default now();
 alter table public.progress add column if not exists sport text;

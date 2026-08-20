@@ -145,36 +145,63 @@ async function validateUser(req: NextRequest) {
   }
 }
 
+const PROGRESS_READ_COLUMNS = [
+  'id',
+  'user_id',
+  'routine_id',
+  'duration_minutes',
+  'completed_at',
+  'created_at',
+  'sport',
+  'areas',
+  'goal',
+] as const
+
+// Older projects are missing columns added after their progress table was
+// created. The single fallback this replaces selected created_at too, so a
+// project without that column had both attempts fail and the dashboard fell
+// back to showing an empty history. Drop whichever column the API names and
+// retry, the way insertProgressRow already does for writes, and order only by
+// the timestamps that survived.
 async function readProgressRows(
   progressClient: ReturnType<typeof createAccessTokenClient> | ReturnType<typeof createServiceRoleClient>,
   userId: string,
 ) {
-  const { data, error } = await progressClient
-    .from('progress')
-    .select('id,user_id,routine_id,duration_minutes,completed_at,created_at,sport,areas,goal')
-    .eq('user_id', userId)
-    .order('completed_at', { ascending: false, nullsFirst: false })
-    .order('created_at', { ascending: false })
+  let columns: string[] = [...PROGRESS_READ_COLUMNS]
 
-  if (!error) {
-    return mapProgressRows((data || []) as ProgressReadRow[])
+  for (let attempt = 0; attempt < PROGRESS_READ_COLUMNS.length; attempt += 1) {
+    let query = progressClient
+      .from('progress')
+      .select(columns.join(','))
+      .eq('user_id', userId)
+
+    if (columns.includes('completed_at')) {
+      query = query.order('completed_at', { ascending: false, nullsFirst: false })
+    }
+
+    if (columns.includes('created_at')) {
+      query = query.order('created_at', { ascending: false })
+    }
+
+    const { data, error } = await query
+
+    if (!error) {
+      return mapProgressRows((data || []) as unknown as ProgressReadRow[])
+    }
+
+    if (!looksLikeSchemaMismatch(error)) {
+      throw error
+    }
+
+    const missingColumn = getMissingColumnName(error)
+    if (!missingColumn || missingColumn === 'id' || missingColumn === 'user_id' || !columns.includes(missingColumn)) {
+      throw error
+    }
+
+    columns = columns.filter((column) => column !== missingColumn)
   }
 
-  if (!looksLikeSchemaMismatch(error)) {
-    throw error
-  }
-
-  const { data: fallbackData, error: fallbackError } = await progressClient
-    .from('progress')
-    .select('id,user_id,duration_minutes,created_at')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-
-  if (fallbackError) {
-    throw fallbackError
-  }
-
-  return mapProgressRows((fallbackData || []) as ProgressReadRow[])
+  throw new Error('Could not read progress with the current table schema.')
 }
 
 async function findExistingProgressId(

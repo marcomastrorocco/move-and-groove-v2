@@ -89,6 +89,7 @@ create table if not exists public.progress (
   created_at timestamptz not null default now()
 );
 
+alter table public.progress add column if not exists created_at timestamptz not null default now();
 alter table public.progress add column if not exists routine_id bigint references public.routines (id) on delete set null;
 alter table public.progress add column if not exists completed_at timestamptz not null default now();
 alter table public.progress add column if not exists sport text;
