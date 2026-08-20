@@ -288,12 +288,18 @@ export default function SessionCheckinPage() {
         postWriteFailed = true
       }
 
+      // progressLoggedAt means "a progress row exists for this session", so only
+      // the code that writes that row may set it. Stamping it here marked the
+      // workout as logged when the write had never happened, which silenced both
+      // recovery paths: /routine short-circuits on it and reports the session as
+      // counted, and the dashboard sync skips it. A failed write then vanished
+      // with no error and no way back. Record the completion time only, which is
+      // what lets the dashboard sync pick the session up later.
       const routineMeta = readStoredRoutineMeta()
-      if (routineMeta?.completedAt || routineMeta?.progressLoggedAt) {
+      if (routineMeta && !routineMeta.completedAt) {
         writeStoredRoutineMeta({
           ...routineMeta,
-          completedAt: routineMeta.completedAt || routineMeta.progressLoggedAt || new Date().toISOString(),
-          progressLoggedAt: routineMeta.progressLoggedAt || routineMeta.completedAt || new Date().toISOString(),
+          completedAt: routineMeta.progressLoggedAt || new Date().toISOString(),
         })
       }
     }
