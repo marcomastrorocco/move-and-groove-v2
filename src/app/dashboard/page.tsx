@@ -244,6 +244,12 @@ export default function DashboardPage() {
 
     if (!response.ok) {
       const payload = await response.json().catch(() => null)
+      // The daily cap is an expected outcome, not a failure. The route pairs
+      // the machine code with human-readable copy, so surface that instead of
+      // showing the caller DAILY_WORKOUT_LIMIT_REACHED.
+      if (payload?.error === 'DAILY_WORKOUT_LIMIT_REACHED') {
+        throw new Error(payload?.message || 'You have already logged both workouts for today. Your next one counts tomorrow.')
+      }
       throw new Error(payload?.error || 'Could not sync pending workout progress.')
     }
 
