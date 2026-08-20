@@ -1,4 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
+import { readDailyWorkoutLimit } from '@/lib/app-config'
 import { createAccessTokenClient, createAuthClient, createServiceRoleClient } from '@/lib/supabase/admin'
 
 type ProgressRow = {
@@ -36,8 +37,6 @@ type ProgressWriteRow = {
   areas?: string[] | null
   goal?: string | null
 }
-
-const DAILY_WORKOUT_LIMIT = 2
 
 function startOfTodayUtcIso() {
   const now = new Date()
@@ -354,13 +353,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, mode: 'existing', id: existingId })
     }
 
-    const [completedWorkoutsToday, isPro] = await Promise.all([
+    const [completedWorkoutsToday, isPro, dailyWorkoutLimit] = await Promise.all([
       countCompletedWorkoutsToday(progressClient, userId),
       readIsProFlag(progressClient, userId),
+      readDailyWorkoutLimit(progressClient as never),
     ])
-    if (!isPro && completedWorkoutsToday >= DAILY_WORKOUT_LIMIT) {
+    if (!isPro && completedWorkoutsToday >= dailyWorkoutLimit) {
       return NextResponse.json(
-        { error: 'DAILY_WORKOUT_LIMIT_REACHED', message: 'You have already completed today\'s two workouts.' },
+        {
+          error: 'DAILY_WORKOUT_LIMIT_REACHED',
+          message: `You have already logged ${dailyWorkoutLimit} ${dailyWorkoutLimit === 1 ? 'workout' : 'workouts'} today.`,
+        },
         { status: 429 },
       )
     }

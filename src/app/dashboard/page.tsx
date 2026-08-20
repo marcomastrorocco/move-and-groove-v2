@@ -10,7 +10,7 @@ import {
   IconResults,
   IconRoutine,
 } from '@/components/Icons'
-import { DEFAULT_BASIC_DAILY_ROUTINE_LIMIT, readBasicDailyRoutineLimit } from '@/lib/app-config'
+import { DEFAULT_BASIC_DAILY_ROUTINE_LIMIT, DEFAULT_DAILY_WORKOUT_LIMIT, readBasicDailyRoutineLimit, readDailyWorkoutLimit } from '@/lib/app-config'
 import { readSavedWorkouts } from '@/lib/saved-workouts'
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
 import { isDemoSessionActive } from '@/lib/demo-session'
@@ -41,11 +41,8 @@ interface WorkoutPlan {
   is_active: boolean
 }
 
-const DAILY_WORKOUT_LIMIT = 2
 const WORKOUT_MINUTE_LIMIT = 45
-const DAILY_MINUTE_LIMIT = DAILY_WORKOUT_LIMIT * WORKOUT_MINUTE_LIMIT
 const LOAD_INCREMENT_MINUTES = 15
-const LOAD_SEGMENTS = DAILY_MINUTE_LIMIT / LOAD_INCREMENT_MINUTES
 
 interface PendingRoutineMeta {
   sport?: string | null
@@ -211,6 +208,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(() => !isDemoSessionActive())
   const [dailyRoutineCount, setDailyRoutineCount] = useState(0)
   const [dailyRoutineLimit, setDailyRoutineLimit] = useState(DEFAULT_BASIC_DAILY_ROUTINE_LIMIT)
+  const [dailyWorkoutLimit, setDailyWorkoutLimit] = useState(DEFAULT_DAILY_WORKOUT_LIMIT)
   const [showWhyFirst, setShowWhyFirst] = useState(false)
   const [weeklyMinutes, setWeeklyMinutes] = useState<number[]>(() => Array.from({ length: 7 }, () => 0))
   const [progressEntries, setProgressEntries] = useState<ProgressEntry[]>([])
@@ -291,6 +289,7 @@ export default function DashboardPage() {
         { data: screening },
         { count: routinesToday },
         basicDailyRoutineLimit,
+        configuredDailyWorkoutLimit,
       ] = await Promise.all([
         progressPromise,
         fetch('/api/workout-plans', {
@@ -315,6 +314,7 @@ export default function DashboardPage() {
         supabase.from('screening_questionnaires').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(1).maybeSingle(),
         supabase.from('routines').select('*', { count: 'exact', head: true }).eq('user_id', userId).gte('created_at', startOfTodayUtc),
         readBasicDailyRoutineLimit(supabase as never),
+        readDailyWorkoutLimit(supabase as never),
       ])
 
       if (progress.length > 0) {
@@ -353,6 +353,7 @@ export default function DashboardPage() {
       setLatestBattery(null)
       setDailyRoutineCount(routinesToday || 0)
       setDailyRoutineLimit(basicDailyRoutineLimit)
+      setDailyWorkoutLimit(configuredDailyWorkoutLimit)
     } catch (error) {
       console.error(error)
     }
@@ -422,7 +423,9 @@ export default function DashboardPage() {
     ? `Latest overall ${latestScreening.overall_score}%${latestScreeningDate ? ` / ${formatDate(latestScreeningDate)}` : ''}`
     : 'No screening saved yet'
   const weeklyLabels = getLastSevenDayLabels()
-  const displayedWeeklyMinutes = weeklyMinutes.map((value) => Math.min(value, DAILY_MINUTE_LIMIT))
+  const dailyMinuteLimit = dailyWorkoutLimit * WORKOUT_MINUTE_LIMIT
+  const loadSegments = Math.ceil(dailyMinuteLimit / LOAD_INCREMENT_MINUTES)
+  const displayedWeeklyMinutes = weeklyMinutes.map((value) => Math.min(value, dailyMinuteLimit))
   const weeklyMinutesTotal = displayedWeeklyMinutes.reduce((sum, value) => sum + value, 0)
   const weeklyActiveDays = displayedWeeklyMinutes.filter((value) => value > 0).length
   const weeklyPeak = Math.max(...displayedWeeklyMinutes, 0)
@@ -753,17 +756,17 @@ export default function DashboardPage() {
                           Daily workout allowance
                         </div>
                         <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 14, fontWeight: 700, letterSpacing: 1.5, color: 'var(--cyan)' }}>
-                          PEAK {weeklyPeak} / {DAILY_MINUTE_LIMIT} MIN
+                          PEAK {weeklyPeak} / {dailyMinuteLimit} MIN
                         </div>
                       </div>
                       <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 1, color: 'var(--silver3)', marginBottom: 12, textTransform: UC }}>
-                        {LOAD_INCREMENT_MINUTES} MIN PER BLOCK · MAX {DAILY_WORKOUT_LIMIT} WORKOUTS × {WORKOUT_MINUTE_LIMIT} MIN
+                        {LOAD_INCREMENT_MINUTES} MIN PER BLOCK · MAX {dailyWorkoutLimit} WORKOUTS × {WORKOUT_MINUTE_LIMIT} MIN
                       </div>
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, minmax(0,1fr))', gap: 8, alignItems: 'end', minHeight: 132 }}>
                         {weeklyLabels.map((label, index) => (
                           <div key={label} style={{ textAlign: 'center' }}>
                             <div style={{ height: 88, display: 'flex', flexDirection: 'column-reverse', alignItems: 'center', justifyContent: 'flex-start', gap: 3, marginBottom: 8 }}>
-                              {Array.from({ length: LOAD_SEGMENTS }, (_, segment) => {
+                              {Array.from({ length: loadSegments }, (_, segment) => {
                                 const segmentMinutes = Math.max(0, Math.min(LOAD_INCREMENT_MINUTES, displayedWeeklyMinutes[index] - segment * LOAD_INCREMENT_MINUTES))
                                 const fillPercent = (segmentMinutes / LOAD_INCREMENT_MINUTES) * 100
                                 return (
@@ -777,7 +780,7 @@ export default function DashboardPage() {
                               {label}
                             </div>
                             <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 'clamp(10px,2.6vw,13px)', letterSpacing: 0.3, color: weeklyMinutes[index] > 0 ? 'var(--white)' : 'var(--silver3)', whiteSpace: 'nowrap' }}>
-                              {displayedWeeklyMinutes[index]} / {DAILY_MINUTE_LIMIT}
+                              {displayedWeeklyMinutes[index]} / {dailyMinuteLimit}
                             </div>
                           </div>
                         ))}

@@ -6,6 +6,7 @@ import Header from '@/components/Header'
 import { CURATED_ROUTINE_LIBRARY, type CuratedArea, type CuratedPillar, type CuratedRoutineExerciseTemplate } from '@/lib/curated-mobility'
 import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
 import { isDemoSessionActive } from '@/lib/demo-session'
+import { EDITABLE_CONFIG_FIELDS, type AppConfigValues, type EditableConfigKey } from '@/lib/app-config'
 import { createClient } from '@/lib/supabase/client'
 
 type AdminOverview = {
@@ -22,10 +23,7 @@ type AdminOverview = {
   }
 }
 
-type AdminConfig = {
-  key: string
-  value: number
-}
+type ConfigStatus = 'idle' | 'saving' | 'saved' | 'error'
 
 type ExerciseVideoOverride = {
   exercise_name: string
@@ -263,7 +261,15 @@ const DEMO_OVERVIEW: AdminOverview = {
   },
 }
 
-const DEMO_CONFIG: AdminConfig = { key: 'basic_daily_routine_limit', value: 2 }
+const DEMO_CONFIG = Object.fromEntries(
+  EDITABLE_CONFIG_FIELDS.map((field) => [field.key, field.fallback]),
+) as AppConfigValues
+
+function draftsFromConfig(values: AppConfigValues) {
+  return Object.fromEntries(
+    EDITABLE_CONFIG_FIELDS.map((field) => [field.key, String(values[field.key])]),
+  ) as Record<EditableConfigKey, string>
+}
 
 export default function AdminPage() {
   const router = useRouter()
@@ -283,9 +289,9 @@ export default function AdminPage() {
   const [youtubeSyncResult, setYoutubeSyncResult] = useState<YoutubeSyncResult | null>(null)
   const [youtubeChannelMasked, setYoutubeChannelMasked] = useState('not configured')
   const [youtubeConfigured, setYoutubeConfigured] = useState(false)
-  const [config, setConfig] = useState<AdminConfig | null>(null)
-  const [configDraft, setConfigDraft] = useState('')
-  const [configStatus, setConfigStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [config, setConfig] = useState<AppConfigValues | null>(null)
+  const [configDrafts, setConfigDrafts] = useState<Record<EditableConfigKey, string>>(() => draftsFromConfig(DEMO_CONFIG))
+  const [configStatus, setConfigStatus] = useState<Partial<Record<EditableConfigKey, ConfigStatus>>>({})
   const [demoMode, setDemoMode] = useState(false)
 
   useEffect(() => {
@@ -299,7 +305,7 @@ export default function AdminPage() {
         setDemoMode(true)
         setOverview(DEMO_OVERVIEW)
         setConfig(DEMO_CONFIG)
-        setConfigDraft(String(DEMO_CONFIG.value))
+        setConfigDrafts(draftsFromConfig(DEMO_CONFIG))
         setDraftYoutubeIds(
           Object.fromEntries(ALL_EXERCISES.map((exercise) => [exercise.name, exercise.hardcodedYoutubeId || ''])),
         )
@@ -380,8 +386,8 @@ export default function AdminPage() {
             ALL_EXERCISES.map((exercise) => [exercise.name, nextOverrides[exercise.name]?.youtube_id || exercise.hardcodedYoutubeId || '']),
           ),
         )
-        setConfig(configPayload)
-        setConfigDraft(String(configPayload.value))
+        setConfig(configPayload.config)
+        setConfigDrafts(draftsFromConfig(configPayload.config))
       } catch (loadError) {
         if (!mounted) return
         setError(loadError instanceof Error ? loadError.message : 'Could not load admin panel.')
@@ -625,18 +631,27 @@ export default function AdminPage() {
     }
   }
 
-  async function saveConfig() {
+  function markConfigStatus(key: EditableConfigKey, status: ConfigStatus) {
+    setConfigStatus((current) => ({ ...current, [key]: status }))
+  }
+
+  async function saveConfig(key: EditableConfigKey) {
+    const fallback = EDITABLE_CONFIG_FIELDS.find((field) => field.key === key)?.fallback ?? 1
+
     if (demoMode) {
-      const parsed = Number(configDraft)
-      setConfig({ key: DEMO_CONFIG.key, value: Number.isFinite(parsed) ? parsed : DEMO_CONFIG.value })
-      setConfigStatus('saved')
-      window.setTimeout(() => setConfigStatus('idle'), 1800)
+      const parsed = Number(configDrafts[key])
+      setConfig((current) => ({
+        ...(current || DEMO_CONFIG),
+        [key]: Number.isFinite(parsed) && parsed > 0 ? parsed : fallback,
+      }))
+      markConfigStatus(key, 'saved')
+      window.setTimeout(() => markConfigStatus(key, 'idle'), 1800)
       return
     }
 
     if (!accessToken) return
 
-    setConfigStatus('saving')
+    markConfigStatus(key, 'saving')
     setError('')
 
     try {
@@ -647,7 +662,8 @@ export default function AdminPage() {
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
-          value: configDraft,
+          key,
+          value: configDrafts[key],
         }),
       })
 
@@ -656,12 +672,12 @@ export default function AdminPage() {
         throw new Error(payload.error || 'Could not save app config.')
       }
 
-      setConfig(payload)
-      setConfigDraft(String(payload.value))
-      setConfigStatus('saved')
-      window.setTimeout(() => setConfigStatus('idle'), 1800)
+      setConfig((current) => ({ ...(current || DEMO_CONFIG), [key]: payload.value }))
+      setConfigDrafts((current) => ({ ...current, [key]: String(payload.value) }))
+      markConfigStatus(key, 'saved')
+      window.setTimeout(() => markConfigStatus(key, 'idle'), 1800)
     } catch (configError) {
-      setConfigStatus('error')
+      markConfigStatus(key, 'error')
       setError(configError instanceof Error ? configError.message : 'Could not save app config.')
     }
   }
@@ -742,43 +758,59 @@ export default function AdminPage() {
               CONFIG
             </div>
             <div style={{ background: 'rgba(8,10,14,0.96)', border: '1px solid rgba(255,255,255,0.08)', padding: '20px' }}>
-              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 3, color: 'var(--cyan)', textTransform: UC, marginBottom: 10 }}>
-                Basic Daily Routine Limit
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '180px 140px 100px', gap: 12, alignItems: 'center', maxWidth: 520 }}>
-                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: 'var(--silver2)', lineHeight: 1.7 }}>
-                  Current value: {config?.value ?? 0}
-                </div>
-                <input
-                  value={configDraft}
-                  onChange={(event) => setConfigDraft(event.target.value)}
-                  style={{
-                    background: 'rgba(255,255,255,0.02)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: 'var(--white)',
-                    padding: '10px 12px',
-                    fontFamily: "'DM Mono',monospace",
-                    fontSize: 12,
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => { void saveConfig() }}
-                  style={{
-                    width: '100%',
-                    background: configStatus === 'saved' ? 'rgba(0,180,216,0.18)' : 'transparent',
-                    border: '1px solid rgba(0,180,216,0.28)',
-                    color: configStatus === 'error' ? '#ff9f9f' : 'var(--cyan)',
-                    padding: '10px 8px',
-                    cursor: 'pointer',
-                    fontFamily: "'DM Mono',monospace",
-                    fontSize: 9,
-                    letterSpacing: 2,
-                    textTransform: UC,
-                  }}
-                >
-                  {configStatus === 'saving' ? 'Saving' : configStatus === 'saved' ? 'Saved' : configStatus === 'error' ? 'Retry' : 'Save'}
-                </button>
+              <div style={{ display: 'grid', gap: 24 }}>
+                {EDITABLE_CONFIG_FIELDS.map((field) => {
+                  const status = configStatus[field.key] || 'idle'
+
+                  return (
+                    <div key={field.key}>
+                      <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 3, color: 'var(--cyan)', textTransform: UC, marginBottom: 6 }}>
+                        {field.label}
+                      </div>
+                      <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 13, color: 'var(--silver3)', lineHeight: 1.6, marginBottom: 10 }}>
+                        {field.hint}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '180px 140px 100px', gap: 12, alignItems: 'center', maxWidth: 520 }}>
+                        <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: 'var(--silver2)', lineHeight: 1.7 }}>
+                          Current value: {config?.[field.key] ?? field.fallback}
+                        </div>
+                        <input
+                          value={configDrafts[field.key] ?? ''}
+                          onChange={(event) => {
+                            const nextValue = event.target.value
+                            setConfigDrafts((current) => ({ ...current, [field.key]: nextValue }))
+                          }}
+                          style={{
+                            background: 'rgba(255,255,255,0.02)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            color: 'var(--white)',
+                            padding: '10px 12px',
+                            fontFamily: "'DM Mono',monospace",
+                            fontSize: 12,
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => { void saveConfig(field.key) }}
+                          style={{
+                            width: '100%',
+                            background: status === 'saved' ? 'rgba(0,180,216,0.18)' : 'transparent',
+                            border: '1px solid rgba(0,180,216,0.28)',
+                            color: status === 'error' ? '#ff9f9f' : 'var(--cyan)',
+                            padding: '10px 8px',
+                            cursor: 'pointer',
+                            fontFamily: "'DM Mono',monospace",
+                            fontSize: 9,
+                            letterSpacing: 2,
+                            textTransform: UC,
+                          }}
+                        >
+                          {status === 'saving' ? 'Saving' : status === 'saved' ? 'Saved' : status === 'error' ? 'Retry' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </section>
