@@ -33,6 +33,20 @@ create table if not exists public.routine_items (
   created_at timestamptz not null default now()
 );
 
+-- The create-table statements above are no-ops on a project where these tables
+-- already exist, so columns added after the first release must be backfilled
+-- explicitly. See database/supabase-routines-saved-columns.sql for the incident
+-- this guards against ('column routines.saved_at does not exist' in production).
+alter table public.routines add column if not exists sport text;
+alter table public.routines add column if not exists areas text[] not null default '{}';
+alter table public.routines add column if not exists goal text;
+alter table public.routines add column if not exists duration_minutes integer;
+alter table public.routines add column if not exists difficulty text;
+alter table public.routines add column if not exists summary text;
+alter table public.routines add column if not exists evidence_summary text;
+alter table public.routines add column if not exists is_saved boolean not null default false;
+alter table public.routines add column if not exists saved_at timestamptz;
+
 create index if not exists routines_user_created_at_idx
   on public.routines (user_id, created_at desc);
 
