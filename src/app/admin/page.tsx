@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Header from '@/components/Header'
 import { CURATED_ROUTINE_LIBRARY, type CuratedArea, type CuratedPillar, type CuratedRoutineExerciseTemplate } from '@/lib/curated-mobility'
 import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
+import { isDemoSessionActive } from '@/lib/demo-session'
 import { createClient } from '@/lib/supabase/client'
 
 type AdminOverview = {
@@ -235,6 +236,35 @@ const EXERCISE_NAME_LOOKUP = new Map(
   ALL_EXERCISES.map((exercise) => [exercise.name.trim().toLowerCase(), exercise.name] as const),
 )
 
+// Local preview only. Gated on NODE_ENV === 'development' at the call site, so
+// this never becomes a way into the admin panel on a deployed build.
+const DEMO_OVERVIEW: AdminOverview = {
+  users: {
+    totalRegisteredUsers: 128,
+    newSignupsThisWeek: 14,
+    totalScreeningsCompleted: 96,
+    totalRoutinesGenerated: 212,
+  },
+  routines: {
+    mostPopularSports: [
+      { label: 'Running', count: 47 },
+      { label: 'Football', count: 33 },
+      { label: 'Cricket', count: 28 },
+      { label: 'Swimming', count: 19 },
+      { label: 'Cycling', count: 11 },
+    ],
+    mostPopularGoals: [
+      { label: 'Injury Prevention', count: 58 },
+      { label: 'Mobility', count: 44 },
+      { label: 'Recovery', count: 31 },
+      { label: 'Performance', count: 22 },
+    ],
+    averageSessionDuration: 18,
+  },
+}
+
+const DEMO_CONFIG: AdminConfig = { key: 'basic_daily_routine_limit', value: 2 }
+
 export default function AdminPage() {
   const router = useRouter()
   const supabase = createClient()
@@ -256,11 +286,27 @@ export default function AdminPage() {
   const [config, setConfig] = useState<AdminConfig | null>(null)
   const [configDraft, setConfigDraft] = useState('')
   const [configStatus, setConfigStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [demoMode, setDemoMode] = useState(false)
 
   useEffect(() => {
     let mounted = true
 
     async function loadAdmin() {
+      // Local preview of the admin UI without Supabase credentials. Never runs
+      // in a production build.
+      if (process.env.NODE_ENV === 'development' && isDemoSessionActive()) {
+        if (!mounted) return
+        setDemoMode(true)
+        setOverview(DEMO_OVERVIEW)
+        setConfig(DEMO_CONFIG)
+        setConfigDraft(String(DEMO_CONFIG.value))
+        setDraftYoutubeIds(
+          Object.fromEntries(ALL_EXERCISES.map((exercise) => [exercise.name, exercise.hardcodedYoutubeId || ''])),
+        )
+        setLoading(false)
+        return
+      }
+
       const { data: { session } } = await supabase.auth.getSession()
 
       if (!mounted) return
@@ -382,6 +428,21 @@ export default function AdminPage() {
   }, [filteredExercises])
 
   async function saveVideoMapping(exerciseName: string) {
+    if (demoMode) {
+      setOverrides((current) => ({
+        ...current,
+        [exerciseName]: {
+          exercise_name: exerciseName,
+          youtube_id: draftYoutubeIds[exerciseName] || '',
+        },
+      }))
+      setSaveStatus((current) => ({ ...current, [exerciseName]: 'saved' }))
+      window.setTimeout(() => {
+        setSaveStatus((current) => ({ ...current, [exerciseName]: 'idle' }))
+      }, 1800)
+      return
+    }
+
     if (!accessToken) return
 
     setSaveStatus((current) => ({ ...current, [exerciseName]: 'saving' }))
@@ -420,6 +481,28 @@ export default function AdminPage() {
   }
 
   async function importBulkMappings() {
+    if (demoMode) {
+      const parsed = parseBulkMappings(bulkDraft)
+      setDraftYoutubeIds((current) => ({
+        ...current,
+        ...Object.fromEntries(parsed.mappings.map((mapping) => [mapping.exerciseName, mapping.youtubeId])),
+      }))
+      setOverrides((current) => ({
+        ...current,
+        ...Object.fromEntries(
+          parsed.mappings.map((mapping) => [
+            mapping.exerciseName,
+            { exercise_name: mapping.exerciseName, youtube_id: mapping.youtubeId },
+          ]),
+        ),
+      }))
+      setBulkSummary({ added: parsed.mappings.length, skipped: parsed.errors.length, errors: parsed.errors })
+      if (parsed.mappings.length > 0) {
+        setBulkDraft('')
+      }
+      return
+    }
+
     if (!accessToken || bulkSaving) return
 
     setBulkSaving(true)
@@ -543,6 +626,14 @@ export default function AdminPage() {
   }
 
   async function saveConfig() {
+    if (demoMode) {
+      const parsed = Number(configDraft)
+      setConfig({ key: DEMO_CONFIG.key, value: Number.isFinite(parsed) ? parsed : DEMO_CONFIG.value })
+      setConfigStatus('saved')
+      window.setTimeout(() => setConfigStatus('idle'), 1800)
+      return
+    }
+
     if (!accessToken) return
 
     setConfigStatus('saving')
@@ -611,6 +702,11 @@ export default function AdminPage() {
             <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 16, color: 'var(--silver2)', lineHeight: 1.75, maxWidth: 760 }}>
               Manage the internal overview metrics and live exercise video mappings without touching the user-facing flows.
             </div>
+            {demoMode && (
+              <div style={{ marginTop: 16, border: '1px solid rgba(255,206,120,0.24)', background: 'rgba(255,206,120,0.07)', padding: '12px 14px', fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: '#ffce78' }}>
+                Local demo preview — metrics are sample values and nothing you save here is written to Supabase.
+              </div>
+            )}
             {error && (
               <div style={{ marginTop: 16, border: '1px solid rgba(255,143,143,0.2)', background: 'rgba(255,143,143,0.07)', padding: '12px 14px', fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: '#ff9f9f' }}>
                 {error}
