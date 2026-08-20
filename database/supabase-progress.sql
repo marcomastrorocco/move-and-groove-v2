@@ -31,7 +31,7 @@ begin
     where nsp.nspname = 'public'
       and rel.relname = 'progress'
       and con.contype = 'c'
-      and pg_get_constraintdef(con) like '%duration_minutes%'
+      and pg_get_constraintdef(con.oid) like '%duration_minutes%'
   loop
     execute format('alter table public.progress drop constraint %I', existing_constraint);
   end loop;

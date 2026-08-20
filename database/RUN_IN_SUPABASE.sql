@@ -109,7 +109,7 @@ begin
     where nsp.nspname = 'public'
       and rel.relname = 'progress'
       and con.contype = 'c'
-      and pg_get_constraintdef(con) like '%duration_minutes%'
+      and pg_get_constraintdef(con.oid) like '%duration_minutes%'
   loop
     execute format('alter table public.progress drop constraint %I', existing_constraint);
   end loop;
@@ -189,7 +189,7 @@ where table_schema = 'public' and table_name = 'routines'
 
 -- Expect: duration_minutes > 0 AND duration_minutes <= 45
 -- If it still shows in (20, 30, 45), BLOCK 2 did not apply.
-select con.conname, pg_get_constraintdef(con) as definition
+select con.conname, pg_get_constraintdef(con.oid) as definition
 from pg_constraint con
 join pg_class rel on rel.oid = con.conrelid
 join pg_namespace nsp on nsp.oid = rel.relnamespace
