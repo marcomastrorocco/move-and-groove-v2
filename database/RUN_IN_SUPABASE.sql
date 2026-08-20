@@ -5,13 +5,21 @@
 -- Paste the whole file and press Run. Every statement is idempotent, so running
 -- it twice is safe and values an admin has already set are preserved.
 --
--- Fixes, in order:
---   STEP 1  "column routines.saved_at does not exist" when starring a workout
---   STEP 2  creates app_config, which holds the admin-editable limits
---   STEP 3  raises the daily workout cap so completed sessions keep counting
---   STEP 4  verification queries - read the output to confirm each step
+-- STEP 1 and STEP 2 both exist because the schema files use
+-- `create table if not exists`. On a project where the table already exists
+-- those scripts do nothing, so anything added or changed after the table was
+-- first created never reached the live database.
 --
--- STEP 5 and STEP 6 are optional and commented out. Read them before using.
+--   STEP 1  "column routines.saved_at does not exist" when starring a workout
+--   STEP 2  completed workouts never reaching the dashboard: the live progress
+--           table still carries check (duration_minutes in (20, 30, 45)) while
+--           the quiz slider offers 15/20/25/30/35/40/45, so any other value is
+--           rejected on insert
+--   STEP 3  creates app_config, which holds the admin-editable limits
+--   STEP 4  raises the daily workout cap so completed sessions keep counting
+--   STEP 5  verification queries - read the output to confirm each step
+--
+-- STEP 6 and STEP 7 are optional and commented out. Read them before using.
 --
 -- After running this, redeploy the site from main. The database change alone is
 -- not enough: the code that reads these values ships in the deploy.
@@ -21,9 +29,6 @@
 -- ============================================================================
 -- STEP 1 - saved-workout columns on public.routines
 -- ============================================================================
--- database/supabase-routines.sql creates this table with `if not exists`, so on
--- a project where routines predates the saved-workout feature the script is a
--- no-op and these columns were never added.
 
 alter table public.routines add column if not exists sport text;
 alter table public.routines add column if not exists areas text[] not null default '{}';
@@ -41,10 +46,43 @@ create index if not exists routines_user_saved_at_idx
 
 
 -- ============================================================================
--- STEP 2 - app_config, the admin-editable limits
+-- STEP 2 - workout duration constraint on public.progress
 -- ============================================================================
--- Read by the dashboard in the browser and by /api/progress and
--- /api/routines/generate on the server.
+-- Drops whatever check constraint the live table has on duration_minutes and
+-- reapplies the current one. The loop avoids having to guess its name.
+
+do $$
+declare
+  existing_constraint text;
+begin
+  for existing_constraint in
+    select con.conname
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace nsp on nsp.oid = rel.relnamespace
+    where nsp.nspname = 'public'
+      and rel.relname = 'progress'
+      and con.contype = 'c'
+      and pg_get_constraintdef(con) like '%duration_minutes%'
+  loop
+    execute format('alter table public.progress drop constraint %I', existing_constraint);
+  end loop;
+end $$;
+
+alter table public.progress
+  add constraint progress_duration_minutes_check
+  check (duration_minutes > 0 and duration_minutes <= 45);
+
+alter table public.progress add column if not exists routine_id bigint references public.routines(id) on delete set null;
+alter table public.progress add column if not exists completed_at timestamptz not null default now();
+alter table public.progress add column if not exists sport text;
+alter table public.progress add column if not exists areas text[];
+alter table public.progress add column if not exists goal text;
+
+
+-- ============================================================================
+-- STEP 3 - app_config, the admin-editable limits
+-- ============================================================================
 
 create table if not exists public.app_config (
   key text primary key,
@@ -67,7 +105,6 @@ create policy "Authenticated users can read app config"
 -- role key in /api/admin/config, behind requireAdminAccess, so a signed-in user
 -- cannot raise their own limits from the browser.
 
--- Seed defaults without overwriting anything already set.
 insert into public.app_config (key, value)
 values
   ('basic_daily_routine_limit', '2'),
@@ -76,11 +113,10 @@ on conflict (key) do nothing;
 
 
 -- ============================================================================
--- STEP 3 - raise the daily workout cap
+-- STEP 4 - raise the daily workout cap
 -- ============================================================================
--- This is why a finished workout stopped showing up on the dashboard: the third
--- session of the day was refused. Change '20' to whatever you want. After the
--- deploy you can edit this from the admin panel instead of running SQL.
+-- Change '20' to whatever you want. After the deploy this is editable from the
+-- admin panel instead of here.
 
 update public.app_config
 set value = '20', updated_at = now()
@@ -93,23 +129,31 @@ notify pgrst, 'reload schema';
 
 
 -- ============================================================================
--- STEP 4 - verification
+-- STEP 5 - verification
 -- ============================================================================
 
--- Expect is_saved and saved_at in this list.
+-- Expect is_saved and saved_at.
 select column_name, data_type
 from information_schema.columns
 where table_schema = 'public' and table_name = 'routines'
   and column_name in ('is_saved', 'saved_at');
 
--- Expect both keys, with daily_workout_limit at the value set in STEP 3.
+-- Expect: duration_minutes > 0 AND duration_minutes <= 45
+-- If it still shows in (20, 30, 45), STEP 2 did not apply.
+select con.conname, pg_get_constraintdef(con) as definition
+from pg_constraint con
+join pg_class rel on rel.oid = con.conrelid
+join pg_namespace nsp on nsp.oid = rel.relnamespace
+where nsp.nspname = 'public' and rel.relname = 'progress' and con.contype = 'c';
+
+-- Expect both keys, with daily_workout_limit at the value set in STEP 4.
 select key, value, updated_at
 from public.app_config
 order by key;
 
 
 -- ============================================================================
--- STEP 5 (OPTIONAL) - what has been logged today
+-- STEP 6 (OPTIONAL) - what has been logged today
 -- ============================================================================
 -- Replace the email. Run this if the dashboard still shows no time: it tells
 -- you whether rows exist at all.
@@ -123,11 +167,11 @@ order by key;
 
 
 -- ============================================================================
--- STEP 6 (OPTIONAL, DESTRUCTIVE) - clear today's test rows
+-- STEP 7 (OPTIONAL, DESTRUCTIVE) - clear one account's rows for today
 -- ============================================================================
--- Only needed if you want to reset the day's count instead of raising the cap.
--- This DELETES rows permanently and cannot be undone. Run STEP 5 first and read
--- the output, so you know exactly what this will remove.
+-- Only needed to reset a day's count instead of raising the cap. This DELETES
+-- rows permanently and cannot be undone. Run STEP 6 first and read the output,
+-- so you know exactly what this will remove.
 --
 -- delete from public.progress p
 -- using auth.users u

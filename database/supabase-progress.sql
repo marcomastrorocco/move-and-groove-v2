@@ -13,6 +13,40 @@ create table if not exists public.progress (
   created_at timestamptz not null default now()
 );
 
+-- The create-table statement above is a no-op on a project where public.progress
+-- already exists, so a constraint tightened or relaxed after the first release
+-- has to be reapplied explicitly. This one started life as
+-- `check (duration_minutes in (20, 30, 45))`; leaving that in place rejects
+-- every other duration the quiz slider offers, and the workout silently fails
+-- to reach the dashboard.
+do $$
+declare
+  existing_constraint text;
+begin
+  for existing_constraint in
+    select con.conname
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace nsp on nsp.oid = rel.relnamespace
+    where nsp.nspname = 'public'
+      and rel.relname = 'progress'
+      and con.contype = 'c'
+      and pg_get_constraintdef(con) like '%duration_minutes%'
+  loop
+    execute format('alter table public.progress drop constraint %I', existing_constraint);
+  end loop;
+end $$;
+
+alter table public.progress
+  add constraint progress_duration_minutes_check
+  check (duration_minutes > 0 and duration_minutes <= 45);
+
+alter table public.progress add column if not exists routine_id bigint references public.routines(id) on delete set null;
+alter table public.progress add column if not exists completed_at timestamptz not null default now();
+alter table public.progress add column if not exists sport text;
+alter table public.progress add column if not exists areas text[];
+alter table public.progress add column if not exists goal text;
+
 create index if not exists progress_user_completed_at_idx
   on public.progress (user_id, completed_at desc);
 
