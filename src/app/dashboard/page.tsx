@@ -213,6 +213,7 @@ export default function DashboardPage() {
   const [weeklyMinutes, setWeeklyMinutes] = useState<number[]>(() => Array.from({ length: 7 }, () => 0))
   const [progressEntries, setProgressEntries] = useState<ProgressEntry[]>([])
   const [activePlan, setActivePlan] = useState<WorkoutPlan | null>(null)
+  const [progressError, setProgressError] = useState('')
 
   const syncPendingRoutineProgress = useCallback(async (accessToken: string, userId: string) => {
     const routineMeta = readStoredRoutineMeta()
@@ -259,8 +260,11 @@ export default function DashboardPage() {
 
   const loadData = useCallback(async (userId: string, accessToken: string) => {
     try {
+      setProgressError('')
+
       await syncPendingRoutineProgress(accessToken, userId).catch((error) => {
         console.warn('[dashboard.progress.recover]', error)
+        setProgressError(`Could not save your last workout: ${error instanceof Error ? error.message : String(error)}`)
       })
 
       const startOfTodayUtc = (() => {
@@ -280,6 +284,7 @@ export default function DashboardPage() {
         return (payload?.progress || []) as ProgressEntry[]
       }).catch((error) => {
         console.warn('[dashboard.progress]', error)
+        setProgressError(`Could not read your workout history: ${error instanceof Error ? error.message : String(error)}`)
         return [] as ProgressEntry[]
       })
       const [
@@ -750,6 +755,11 @@ export default function DashboardPage() {
                         </div>
                       </div>
                     </div>
+                    {progressError && (
+                      <div style={{ border: '1px solid rgba(255,143,143,0.24)', background: 'rgba(255,143,143,0.08)', padding: '12px 14px', marginBottom: 14, fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: '#ff9f9f', lineHeight: 1.6 }}>
+                        {progressError}
+                      </div>
+                    )}
                     <div style={{ border: '1px solid rgba(139,231,255,0.14)', background: 'linear-gradient(180deg, rgba(14,18,24,0.98) 0%, rgba(6,8,12,0.98) 100%)', padding: '16px 16px 14px', marginBottom: 14, boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.04)' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
                         <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, letterSpacing: 2.5, color: 'var(--silver2)', textTransform: UC }}>
