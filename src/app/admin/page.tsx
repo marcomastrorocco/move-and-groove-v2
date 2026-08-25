@@ -1,13 +1,14 @@
 ﻿'use client'
 
-import { useEffect, useMemo, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Header from '@/components/Header'
+import AdminLoginGate from '@/components/AdminLoginGate'
 import { CURATED_ROUTINE_LIBRARY, type CuratedArea, type CuratedPillar, type CuratedRoutineExerciseTemplate } from '@/lib/curated-mobility'
 import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
 import { isDemoSessionActive } from '@/lib/demo-session'
 import { EDITABLE_CONFIG_FIELDS, type AppConfigValues, type EditableConfigKey } from '@/lib/app-config'
 import { createClient } from '@/lib/supabase/client'
+import { emailToOwnerId } from '@/lib/admin-identity'
 
 type AdminOverview = {
   users: {
@@ -24,6 +25,10 @@ type AdminOverview = {
 }
 
 type ConfigStatus = 'idle' | 'saving' | 'saved' | 'error'
+
+// 'locked' and 'denied' both render the owner login instead of the panel, so a
+// visitor who is not the owner never lands on the athlete sign-in page.
+type GateState = 'checking' | 'locked' | 'denied' | 'open'
 
 type ExerciseVideoOverride = {
   exercise_name: string
@@ -272,8 +277,10 @@ function draftsFromConfig(values: AppConfigValues) {
 }
 
 export default function AdminPage() {
-  const router = useRouter()
   const supabase = createClient()
+  const [gate, setGate] = useState<GateState>('checking')
+  const [signedInAs, setSignedInAs] = useState('')
+  const [sessionNonce, setSessionNonce] = useState(0)
   const [loading, setLoading] = useState(true)
   const [accessToken, setAccessToken] = useState('')
   const [overview, setOverview] = useState<AdminOverview | null>(null)
@@ -298,10 +305,13 @@ export default function AdminPage() {
     let mounted = true
 
     async function loadAdmin() {
+      setLoading(true)
+
       // Local preview of the admin UI without Supabase credentials. Never runs
       // in a production build.
       if (process.env.NODE_ENV === 'development' && isDemoSessionActive()) {
         if (!mounted) return
+        setGate('open')
         setDemoMode(true)
         setOverview(DEMO_OVERVIEW)
         setConfig(DEMO_CONFIG)
@@ -318,7 +328,8 @@ export default function AdminPage() {
       if (!mounted) return
 
       if (!session) {
-        router.replace('/auth')
+        setGate('locked')
+        setLoading(false)
         return
       }
 
@@ -331,10 +342,13 @@ export default function AdminPage() {
       if (!mounted) return
 
       if (profileError || !profile?.is_admin) {
-        router.replace('/dashboard')
+        setSignedInAs(emailToOwnerId(session.user.email))
+        setGate('denied')
+        setLoading(false)
         return
       }
 
+      setGate('open')
       setAccessToken(session.access_token)
 
       try {
@@ -402,7 +416,7 @@ export default function AdminPage() {
     return () => {
       mounted = false
     }
-  }, [router, supabase])
+  }, [supabase, sessionNonce])
 
   const filteredExercises = useMemo(() => {
     const normalized = search.trim().toLowerCase()
@@ -682,10 +696,29 @@ export default function AdminPage() {
     }
   }
 
+  const handleSessionChange = useCallback(() => {
+    // Drop back to the loading state while the new session is checked, so the
+    // login form does not flash empty between a correct passcode and the panel.
+    setGate('checking')
+    setSessionNonce((value) => value + 1)
+  }, [])
+
+  if (gate === 'locked' || gate === 'denied') {
+    return (
+      <AdminLoginGate
+        denied={gate === 'denied'}
+        signedInAs={signedInAs}
+        onSessionChange={handleSessionChange}
+      />
+    )
+  }
+
   if (loading) {
     return (
       <>
-        <Header />
+        {/* The athlete header would flash a public nav at someone who is about
+            to be sent to the owner login, so hold it back until access is known. */}
+        {gate === 'open' && <Header />}
         <main style={{ position: 'relative', zIndex: 2, paddingTop: 64 }}>
           <div style={{ textAlign: 'center', padding: '120px 40px' }}>
             <div className="loading-ring" />
