@@ -37,8 +37,15 @@ export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: 
     const { error: signInError } = await supabase.auth.signInWithPassword({ email: address, password })
 
     if (signInError) {
-      // Deliberately generic: never confirm which owner accounts exist.
-      setError('Those credentials were not accepted.')
+      // An unconfirmed address is worth naming: the owner has already proved
+      // the password, so hiding it only leaves them guessing at a state they
+      // can fix from their inbox. Everything else stays generic so a wrong
+      // guess never confirms which accounts exist.
+      setError(
+        signInError.message.toLowerCase().includes('not confirmed')
+          ? 'That account has not confirmed its email yet. Open the confirmation link, then sign in again.'
+          : 'Those credentials were not accepted.',
+      )
       setLoading(false)
       return
     }
