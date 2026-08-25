@@ -8,7 +8,6 @@ import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
 import { isDemoSessionActive } from '@/lib/demo-session'
 import { EDITABLE_CONFIG_FIELDS, type AppConfigValues, type EditableConfigKey } from '@/lib/app-config'
 import { createClient } from '@/lib/supabase/client'
-import { emailToOwnerId } from '@/lib/admin-identity'
 
 type AdminOverview = {
   users: {
@@ -342,7 +341,7 @@ export default function AdminPage() {
       if (!mounted) return
 
       if (profileError || !profile?.is_admin) {
-        setSignedInAs(emailToOwnerId(session.user.email))
+        setSignedInAs(session.user.email || 'unknown account')
         setGate('denied')
         setLoading(false)
         return

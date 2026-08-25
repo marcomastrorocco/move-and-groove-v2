@@ -3,14 +3,13 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { DEFAULT_OWNER_ID, ownerIdToEmail } from '@/lib/admin-identity'
 
 const UC = 'uppercase' as const
 
 type Props = {
   // true once a session exists but the account carries no is_admin flag.
   denied: boolean
-  // Owner ID of the signed-in account, shown only in the denied state.
+  // Address of the signed-in account, shown only in the denied state.
   signedInAs: string
   // Ask the admin page to re-run its session and is_admin check.
   onSessionChange: () => void
@@ -19,32 +18,32 @@ type Props = {
 export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: Props) {
   const supabase = createClient()
 
-  const [ownerId, setOwnerId] = useState('')
-  const [passcode, setPasscode] = useState('')
-  const [showPasscode, setShowPasscode] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   async function handleUnlock() {
     setError('')
 
-    const email = ownerIdToEmail(ownerId)
-    if (!email || !passcode) {
-      setError('Enter the owner ID and passcode.')
+    const address = email.trim().toLowerCase()
+    if (!address || !password) {
+      setError('Enter the owner email and password.')
       return
     }
 
     setLoading(true)
-    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password: passcode })
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email: address, password })
 
     if (signInError) {
-      // Deliberately generic: never reveal whether an owner ID exists.
+      // Deliberately generic: never confirm which owner accounts exist.
       setError('Those credentials were not accepted.')
       setLoading(false)
       return
     }
 
-    setPasscode('')
+    setPassword('')
     setLoading(false)
     onSessionChange()
   }
@@ -85,7 +84,7 @@ export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: 
                 </div>
                 <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--silver3)', marginTop: 14, lineHeight: 1.8 }}>
                   SIGNED IN AS
-                  <div style={{ color: 'var(--white)', letterSpacing: 1 }}>{signedInAs}</div>
+                  <div style={{ color: 'var(--white)', letterSpacing: 1, wordBreak: 'break-all' }}>{signedInAs}</div>
                 </div>
                 <button className="btn-primary" onClick={handleSignOut} disabled={loading}
                   style={{ width: '100%', marginTop: 22, padding: 18 }}>
@@ -95,25 +94,25 @@ export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: 
             ) : (
               <div>
                 <div className="form-group">
-                  <label className="form-label">Owner ID</label>
-                  <input className="form-input" type="text" autoComplete="username" placeholder={DEFAULT_OWNER_ID}
-                    value={ownerId} onChange={e => setOwnerId(e.target.value)}
+                  <label className="form-label">Owner Email</label>
+                  <input className="form-input" type="email" autoComplete="username" placeholder="you@example.com"
+                    value={email} onChange={e => setEmail(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleUnlock()} />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Passcode</label>
+                  <label className="form-label">Password</label>
                   <div style={{ position: 'relative' }}>
-                    <input className="form-input" type={showPasscode ? 'text' : 'password'} autoComplete="current-password" placeholder="********"
-                      value={passcode} onChange={e => setPasscode(e.target.value)}
+                    <input className="form-input" type={showPassword ? 'text' : 'password'} autoComplete="current-password" placeholder="********"
+                      value={password} onChange={e => setPassword(e.target.value)}
                       onKeyDown={e => e.key === 'Enter' && handleUnlock()}
                       style={{ paddingRight: 100 }} />
                     <button
                       type="button"
                       className="btn-ghost"
-                      onClick={() => setShowPasscode((value) => !value)}
+                      onClick={() => setShowPassword((value) => !value)}
                       style={{ position: 'absolute', top: '50%', right: 10, transform: 'translateY(-50%)', fontSize: 9, letterSpacing: 2, color: 'var(--cyan3)' }}
                     >
-                      {showPasscode ? 'HIDE' : 'SHOW'}
+                      {showPassword ? 'HIDE' : 'SHOW'}
                     </button>
                   </div>
                 </div>
