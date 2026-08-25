@@ -6,7 +6,15 @@ import { endDemoSession, isDemoSessionActive } from '@/lib/demo-session'
 import { useEffect, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
 
-export default function Header() {
+type Props = {
+  // Overrides where the logo goes. The default destination depends on a
+  // session lookup that only resolves after first paint, so a click landing in
+  // that window falls through to the public homepage -- wrong on a surface
+  // like /admin, which is only reachable while signed in.
+  homeHref?: string
+}
+
+export default function Header({ homeHref }: Props = {}) {
   const router = useRouter()
   const supabase = createClient()
   const [user, setUser] = useState<User | null>(null)
@@ -55,7 +63,7 @@ const initials = demoSession
       backdropFilter: 'blur(24px)',
       borderBottom: '1px solid var(--border)',
     }}>
-      <Link href={signedIn ? '/dashboard' : '/'} style={{ textDecoration: 'none', cursor: 'pointer', minWidth: 0 }}>
+      <Link href={homeHref ?? (signedIn ? '/dashboard' : '/')} style={{ textDecoration: 'none', cursor: 'pointer', minWidth: 0 }}>
         <div style={{
           fontFamily: "'Syncopate', sans-serif",
           fontSize: 'clamp(13px, 3.4vw, 17px)', fontWeight: 700, letterSpacing: 5,

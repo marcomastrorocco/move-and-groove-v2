@@ -720,7 +720,7 @@ export default function AdminPage() {
       <>
         {/* The athlete header would flash a public nav at someone who is about
             to be sent to the owner login, so hold it back until access is known. */}
-        {gate === 'open' && <Header />}
+        {gate === 'open' && <Header homeHref="/admin" />}
         <main style={{ position: 'relative', zIndex: 2, paddingTop: 64 }}>
           <div style={{ textAlign: 'center', padding: '120px 40px' }}>
             <div className="loading-ring" />
@@ -739,7 +739,7 @@ export default function AdminPage() {
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at top, rgba(0,180,216,0.1) 0%, rgba(0,0,0,0) 36%), linear-gradient(to bottom, rgba(4,6,9,0.98) 0%, rgba(0,0,0,1) 100%)' }} />
       </div>
 
-      <Header />
+      <Header homeHref="/admin" />
 
       <main style={{ position: 'relative', zIndex: 2, paddingTop: 64 }}>
         <div className="mg-page-shell" style={{ maxWidth: 1220 }}>
