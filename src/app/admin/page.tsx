@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Header from '@/components/Header'
 import AdminLoginGate from '@/components/AdminLoginGate'
+import AdminPasswordCard from '@/components/AdminPasswordCard'
 import { CURATED_ROUTINE_LIBRARY, type CuratedArea, type CuratedPillar, type CuratedRoutineExerciseTemplate } from '@/lib/curated-mobility'
 import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
 import { isDemoSessionActive } from '@/lib/demo-session'
@@ -311,6 +312,7 @@ export default function AdminPage() {
       if (process.env.NODE_ENV === 'development' && isDemoSessionActive()) {
         if (!mounted) return
         setGate('open')
+        setSignedInAs('demo preview (no account)')
         setDemoMode(true)
         setOverview(DEMO_OVERVIEW)
         setConfig(DEMO_CONFIG)
@@ -348,6 +350,7 @@ export default function AdminPage() {
       }
 
       setGate('open')
+      setSignedInAs(session.user.email || 'unknown account')
       setAccessToken(session.access_token)
 
       try {
@@ -1088,6 +1091,8 @@ export default function AdminPage() {
               </div>
             </div>
           </section>
+
+          <AdminPasswordCard email={signedInAs} demoMode={demoMode} />
 
           <section>
             <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 18, letterSpacing: 3, color: 'var(--white)', marginBottom: 16 }}>

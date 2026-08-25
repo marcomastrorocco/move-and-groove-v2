@@ -6,6 +6,11 @@ import { createClient } from '@/lib/supabase/client'
 
 const UC = 'uppercase' as const
 
+// Matches the constant on the athlete page. The address is fixed rather than
+// derived from window.location because Supabase only mails links to redirect
+// URLs on its allow-list, and this is the entry that is on it.
+const PASSWORD_RESET_REDIRECT = 'https://move-and-groove-v2.vercel.app/auth/reset'
+
 type Props = {
   // true once a session exists but the account carries no is_admin flag.
   denied: boolean
@@ -23,6 +28,7 @@ export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: 
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [resetSent, setResetSent] = useState(false)
 
   async function handleUnlock() {
     setError('')
@@ -53,6 +59,32 @@ export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: 
     setPassword('')
     setLoading(false)
     onSessionChange()
+  }
+
+  async function handleForgotPassword() {
+    setError('')
+    setResetSent(false)
+
+    const address = email.trim().toLowerCase()
+    if (!address) {
+      setError('Enter the owner email first so we know where to send the link.')
+      return
+    }
+
+    setLoading(true)
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(address, {
+      redirectTo: PASSWORD_RESET_REDIRECT,
+    })
+    setLoading(false)
+
+    if (resetError) {
+      setError(resetError.message)
+      return
+    }
+
+    // Reported the same way whether or not the address has an account, so a
+    // guess still cannot confirm which accounts exist.
+    setResetSent(true)
   }
 
   async function handleSignOut() {
@@ -127,6 +159,17 @@ export default function AdminLoginGate({ denied, signedInAs, onSessionChange }: 
                   style={{ width: '100%', marginTop: 12, padding: 18 }}>
                   {loading ? 'UNLOCKING...' : 'UNLOCK PANEL'}
                 </button>
+                <div style={{ textAlign: 'right', marginTop: 12 }}>
+                  <button className="btn-ghost" onClick={handleForgotPassword} disabled={loading}
+                    style={{ fontSize: 10, letterSpacing: 2, color: 'var(--cyan3)' }}>
+                    FORGOT PASSWORD?
+                  </button>
+                </div>
+                {resetSent && (
+                  <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: 'var(--cyan)', marginTop: 12, padding: '10px 14px', borderLeft: '2px solid var(--cyan)', background: 'rgba(0,180,216,0.06)' }}>
+                    If that address has an account, a reset link is on its way to it.
+                  </div>
+                )}
                 {error && <div className="auth-error">{error}</div>}
               </div>
             )}
