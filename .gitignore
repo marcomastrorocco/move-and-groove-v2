@@ -46,6 +46,9 @@ next-env.d.ts
 move-groove-dev.err.log
 move-groove-dev.out.log
 supabase/
+!supabase/
+!supabase/migrations/
+!supabase/migrations/*.sql
 
 # local dev server logs
 dev-server.*.log

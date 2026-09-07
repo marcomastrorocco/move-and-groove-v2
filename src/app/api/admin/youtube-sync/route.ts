@@ -71,6 +71,23 @@ function flattenExerciseNames() {
   return Array.from(names)
 }
 
+async function appendCustomExerciseNames(serviceClient: Awaited<ReturnType<typeof requireAdminAccess>>['serviceClient'], names: Set<string>) {
+  const { data, error } = await serviceClient
+    .from('custom_exercises')
+    .select('exercise_name')
+
+  if (error) {
+    throw error
+  }
+
+  ;(data || []).forEach((row) => {
+    const name = typeof row.exercise_name === 'string' ? row.exercise_name.trim() : ''
+    if (name) {
+      names.add(name)
+    }
+  })
+}
+
 function normalizeText(value: string) {
   return value
     .toLowerCase()
@@ -85,13 +102,6 @@ function matchExerciseName(videoTitle: string, exerciseNames: string[]) {
   if (exact) {
     return exact
   }
-
-  const loweredTitle = trimmedTitle.toLowerCase()
-  const contains = exerciseNames.find((exerciseName) => loweredTitle.includes(exerciseName.toLowerCase()))
-  if (contains) {
-    return contains
-  }
-
   const normalizedTitle = normalizeText(trimmedTitle)
   return exerciseNames.find((exerciseName) => normalizeText(exerciseName) === normalizedTitle) || null
 }
@@ -168,7 +178,18 @@ export async function POST(req: NextRequest) {
     const { serviceClient } = await requireAdminAccess(req)
     const apiKey = readRequiredEnv('YOUTUBE_API_KEY')
     const channelId = readRequiredEnv('YOUTUBE_CHANNEL_ID')
-    const exerciseNames = flattenExerciseNames()
+    const { data: databaseExercises, error: databaseExercisesError } = await serviceClient
+      .from('exercises')
+      .select('id, name')
+      .eq('is_active', true)
+    const exerciseNamesSet = new Set<string>()
+    if (!databaseExercisesError && databaseExercises && databaseExercises.length > 0) {
+      databaseExercises.forEach((exercise) => exerciseNamesSet.add(exercise.name))
+    } else {
+      flattenExerciseNames().forEach((name) => exerciseNamesSet.add(name))
+      await appendCustomExerciseNames(serviceClient, exerciseNamesSet)
+    }
+    const exerciseNames = Array.from(exerciseNamesSet)
     const youtubeVideos = await fetchAllYoutubeVideos(apiKey, channelId)
 
     const matched: MatchResult[] = []
@@ -197,7 +218,12 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    if (matched.length > 0) {
+    if (matched.length > 0 && !databaseExercisesError && databaseExercises && databaseExercises.length > 0) {
+      for (const item of matched) {
+        const { error } = await serviceClient.from('exercises').update({ youtube_id: item.youtubeId }).eq('name', item.exerciseName)
+        if (error) throw new Error(error.message)
+      }
+    } else if (matched.length > 0) {
       const rows = matched.map((item) => ({
         exercise_name: item.exerciseName,
         youtube_id: item.youtubeId,

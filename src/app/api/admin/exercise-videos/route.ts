@@ -42,15 +42,15 @@ function normalizeYoutubeId(value: string) {
 export async function GET(req: NextRequest) {
   try {
     const { serviceClient } = await requireAdminAccess(req)
-    const { data, error } = await serviceClient
-      .from('exercise_videos')
-      .select('exercise_name, youtube_id, updated_at')
-      .order('exercise_name', { ascending: true })
-
-    if (error) {
-      throw new Error(error.message)
+    const { data: exercises, error: exercisesError } = await serviceClient
+      .from('exercises')
+      .select('name, youtube_id, updated_at')
+      .order('name', { ascending: true })
+    if (!exercisesError) {
+      return NextResponse.json({ mappings: (exercises || []).map((exercise) => ({ exercise_name: exercise.name, youtube_id: exercise.youtube_id, updated_at: exercise.updated_at })) })
     }
-
+    const { data, error } = await serviceClient.from('exercise_videos').select('exercise_name, youtube_id, updated_at').order('exercise_name', { ascending: true })
+    if (error) throw new Error(error.message)
     return NextResponse.json({ mappings: data || [] })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
@@ -84,21 +84,22 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'No valid exercise mappings were provided.' }, { status: 400 })
       }
 
-      const { data, error } = await serviceClient
-        .from('exercise_videos')
-        .upsert(rows, {
-          onConflict: 'exercise_name',
-        })
-        .select('exercise_name, youtube_id, updated_at')
-
-      if (error) {
-        throw new Error(error.message)
+      const { data: exercises, error: exercisesError } = await serviceClient.from('exercises').select('id, name')
+      if (!exercisesError && exercises) {
+        const idsByName = new Map(exercises.map((exercise) => [exercise.name.toLowerCase(), exercise.id]))
+        const updated = []
+        for (const row of rows) {
+          const id = idsByName.get(row.exercise_name.toLowerCase())
+          if (!id) continue
+          const { data, error } = await serviceClient.from('exercises').update({ youtube_id: row.youtube_id }).eq('id', id).select('name, youtube_id, updated_at').single()
+          if (error) throw new Error(error.message)
+          updated.push({ exercise_name: data.name, youtube_id: data.youtube_id, updated_at: data.updated_at })
+        }
+        return NextResponse.json({ count: updated.length, mappings: updated })
       }
-
-      return NextResponse.json({
-        count: data?.length || 0,
-        mappings: data || [],
-      })
+      const { data, error } = await serviceClient.from('exercise_videos').upsert(rows, { onConflict: 'exercise_name' }).select('exercise_name, youtube_id, updated_at')
+      if (error) throw new Error(error.message)
+      return NextResponse.json({ count: data?.length || 0, mappings: data || [] })
     }
 
     const exerciseName = body.exerciseName?.trim() || ''
@@ -108,22 +109,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Exercise name is required.' }, { status: 400 })
     }
 
-    const { data, error } = await serviceClient
-      .from('exercise_videos')
-      .upsert({
-        exercise_name: exerciseName,
-        youtube_id: youtubeId || null,
-        updated_at: new Date().toISOString(),
-      }, {
-        onConflict: 'exercise_name',
-      })
-      .select('exercise_name, youtube_id, updated_at')
-      .single()
-
-    if (error) {
-      throw new Error(error.message)
+    const { data: exercise, error: exerciseError } = await serviceClient.from('exercises').select('id, name').ilike('name', exerciseName).maybeSingle()
+    if (!exerciseError && exercise) {
+      const { data, error } = await serviceClient.from('exercises').update({ youtube_id: youtubeId || null }).eq('id', exercise.id).select('name, youtube_id, updated_at').single()
+      if (error) throw new Error(error.message)
+      return NextResponse.json({ mapping: { exercise_name: data.name, youtube_id: data.youtube_id, updated_at: data.updated_at } })
     }
-
+    const { data, error } = await serviceClient.from('exercise_videos').upsert({ exercise_name: exerciseName, youtube_id: youtubeId || null, updated_at: new Date().toISOString() }, { onConflict: 'exercise_name' }).select('exercise_name, youtube_id, updated_at').single()
+    if (error) throw new Error(error.message)
     return NextResponse.json({ mapping: data })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'

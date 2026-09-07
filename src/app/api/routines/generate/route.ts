@@ -2,7 +2,12 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
 import { readBasicDailyRoutineLimit } from '@/lib/app-config'
-import { buildApprovedExercisePoolText, CURATED_ROUTINE_LIBRARY } from '@/lib/curated-mobility'
+import { CURATED_ROUTINE_LIBRARY } from '@/lib/curated-mobility'
+import {
+  buildApprovedExercisePoolTextFromLibrary,
+  getActiveExerciseLibrary,
+  type ExerciseLibrary,
+} from '@/lib/exercise-library'
 import {
   deriveRoutineReadinessModifiers,
   readTodayReadinessAdjustmentSnapshot,
@@ -205,13 +210,15 @@ const FOAM_ROLL_LIBRARY: Record<string, FoamRollExercise[]> = {
   ],
 }
 
-function selectFoamRollExercises(areas: string[], duration: number) {
+function selectFoamRollExercises(areas: string[], duration: number, exerciseLibrary?: ExerciseLibrary) {
   const maxExercises = duration <= 20 ? 2 : duration <= 30 ? 3 : 4
   const selected: Array<FoamRollExercise & { sets: number; holdSeconds: number; reps: null }> = []
   const seen = new Set<string>()
 
   for (const area of areas) {
-    const library = FOAM_ROLL_LIBRARY[area] || []
+    const library = exerciseLibrary?.foamRoll[area as keyof typeof exerciseLibrary.foamRoll]
+      ?.map((exercise) => ({ name: exercise.name, area, notes: exercise.rationale }))
+      || FOAM_ROLL_LIBRARY[area] || []
     for (const ex of library) {
       if (selected.length >= maxExercises) break
       if (!seen.has(ex.name)) {
@@ -280,6 +287,7 @@ function finalizeGeneratedRoutine({
   effectiveGoal,
   effectiveReadiness,
   sessionDuration,
+  exerciseLibrary,
 }: {
   rawJson: string
   prepPhase: RoutinePhase | null
@@ -287,6 +295,7 @@ function finalizeGeneratedRoutine({
   effectiveGoal: string
   effectiveReadiness: ReadinessAdjustmentSnapshot | null
   sessionDuration: number
+  exerciseLibrary: ExerciseLibrary
 }) {
   const routine = normalizeRoutineExerciseNames(
     normalizeRoutineForGoal(
@@ -294,6 +303,7 @@ function finalizeGeneratedRoutine({
       { goal: effectiveGoal, readiness: effectiveReadiness },
     ),
     targetAreas,
+    exerciseLibrary,
   )
 
   if (prepPhase) {
@@ -321,6 +331,7 @@ async function requestAnthropicRoutineGeneration({
   effectiveGoal,
   effectiveReadiness,
   sessionDuration,
+  exerciseLibrary,
 }: {
   anthropic: Anthropic
   modelConfig: AiRoutineModelConfig
@@ -330,6 +341,7 @@ async function requestAnthropicRoutineGeneration({
   effectiveGoal: string
   effectiveReadiness: ReadinessAdjustmentSnapshot | null
   sessionDuration: number
+  exerciseLibrary: ExerciseLibrary
 }): Promise<GeneratedRoutineSuccess> {
   const message = await Promise.race([
     anthropic.messages.create({
@@ -358,6 +370,7 @@ async function requestAnthropicRoutineGeneration({
     effectiveGoal,
     effectiveReadiness,
     sessionDuration,
+    exerciseLibrary,
   })
 
   return {
@@ -377,6 +390,7 @@ async function requestOpenAiRoutineGeneration({
   effectiveGoal,
   effectiveReadiness,
   sessionDuration,
+  exerciseLibrary,
 }: {
   apiKey: string
   modelConfig: AiRoutineModelConfig
@@ -386,6 +400,7 @@ async function requestOpenAiRoutineGeneration({
   effectiveGoal: string
   effectiveReadiness: ReadinessAdjustmentSnapshot | null
   sessionDuration: number
+  exerciseLibrary: ExerciseLibrary
 }): Promise<GeneratedRoutineSuccess> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), modelConfig.timeoutMs)
@@ -426,6 +441,7 @@ async function requestOpenAiRoutineGeneration({
       effectiveGoal,
       effectiveReadiness,
       sessionDuration,
+      exerciseLibrary,
     })
 
     return {
@@ -607,10 +623,11 @@ function canAddAnyExercise(
   phases: RoutinePhase[],
   targetAreas: string[],
   pillar: CuratedPillar,
+  exerciseLibrary: ExerciseLibrary,
 ) {
   return targetAreas.some((area) => {
     const phase = phases.find((item) => item.pillar === pillar)
-    const library = getCuratedLibrary(area, pillar)
+    const library = getCuratedLibrary(area, pillar, exerciseLibrary)
     return Boolean(phase && library.some((exercise) => !phase.exercises.some((existing) => existing.name === exercise.name)))
   })
 }
@@ -747,14 +764,16 @@ function addExerciseToPhase({
   pillar,
   area,
   preferredIndex = 0,
+  exerciseLibrary,
 }: {
   phases: RoutinePhase[]
   pillar: CuratedPillar
   area: string
   preferredIndex?: number
+  exerciseLibrary: ExerciseLibrary
 }) {
   const phase = phases.find((item) => item.pillar === pillar)
-  const library = getCuratedLibrary(area, pillar)
+  const library = getCuratedLibrary(area, pillar, exerciseLibrary)
 
   if (!phase || library.length === 0) {
     return false
@@ -781,9 +800,9 @@ function addExerciseToPhase({
   return true
 }
 
-function getCuratedLibrary(area: string, pillar: CuratedPillar) {
-  if (area in CURATED_ROUTINE_LIBRARY) {
-    return CURATED_ROUTINE_LIBRARY[area as keyof typeof CURATED_ROUTINE_LIBRARY][pillar]
+function getCuratedLibrary(area: string, pillar: CuratedPillar, exerciseLibrary: ExerciseLibrary) {
+  if (area in exerciseLibrary.routine) {
+    return exerciseLibrary.routine[area as keyof typeof exerciseLibrary.routine][pillar]
   }
 
   return []
@@ -809,11 +828,11 @@ function normalizeExerciseName(value: string) {
     .trim()
 }
 
-function getApprovedExerciseCanonicalMap(targetAreas: string[]) {
+function getApprovedExerciseCanonicalMap(targetAreas: string[], exerciseLibrary: ExerciseLibrary) {
   const allExercises = targetAreas
-    .filter((area): area is keyof typeof CURATED_ROUTINE_LIBRARY => area in CURATED_ROUTINE_LIBRARY)
+    .filter((area): area is keyof typeof exerciseLibrary.routine => area in exerciseLibrary.routine)
     .flatMap((area) => {
-      const phases = CURATED_ROUTINE_LIBRARY[area]
+      const phases = exerciseLibrary.routine[area]
       return [...phases.release, ...phases.activation, ...phases.range]
     })
 
@@ -827,8 +846,8 @@ function getApprovedExerciseCanonicalMap(targetAreas: string[]) {
   return map
 }
 
-function normalizeRoutineExerciseNames(routine: GeneratedRoutine, targetAreas: string[]) {
-  const approvedMap = getApprovedExerciseCanonicalMap(targetAreas)
+function normalizeRoutineExerciseNames(routine: GeneratedRoutine, targetAreas: string[], exerciseLibrary: ExerciseLibrary) {
+  const approvedMap = getApprovedExerciseCanonicalMap(targetAreas, exerciseLibrary)
 
   return {
     ...routine,
@@ -959,6 +978,7 @@ function buildFallbackRoutine({
   readiness,
   reducedTargetAreas = [],
   releaseBiasAreas = [],
+  exerciseLibrary,
 }: {
   mode: 'sport' | 'area'
   sport: string | null
@@ -969,6 +989,7 @@ function buildFallbackRoutine({
   readiness?: ReadinessAdjustmentSnapshot | null
   reducedTargetAreas?: string[]
   releaseBiasAreas?: string[]
+  exerciseLibrary: ExerciseLibrary
 }): GeneratedRoutine {
   const pillars: Array<'release' | 'activation' | 'range'> = ['release', 'activation', 'range']
   const chosenAreas = getRoutineAreas(targetAreas)
@@ -995,9 +1016,9 @@ function buildFallbackRoutine({
   }))
 
   for (const area of chosenAreas) {
-    addExerciseToPhase({ phases, pillar: 'release', area, preferredIndex: readSportSeed(sport, area, 'release') })
-    addExerciseToPhase({ phases, pillar: 'activation', area, preferredIndex: readSportSeed(sport, area, 'activation') })
-    addExerciseToPhase({ phases, pillar: 'range', area, preferredIndex: readSportSeed(sport, area, 'range') })
+    addExerciseToPhase({ phases, pillar: 'release', area, preferredIndex: readSportSeed(sport, area, 'release'), exerciseLibrary })
+    addExerciseToPhase({ phases, pillar: 'activation', area, preferredIndex: readSportSeed(sport, area, 'activation'), exerciseLibrary })
+    addExerciseToPhase({ phases, pillar: 'range', area, preferredIndex: readSportSeed(sport, area, 'range'), exerciseLibrary })
   }
 
   for (let index = minimumDoseExerciseCount; index < exerciseTarget; index += 1) {
@@ -1014,6 +1035,7 @@ function buildFallbackRoutine({
       pillar,
       area,
       preferredIndex: readSportSeed(sport, area, pillar) + Math.floor(index / Math.max(areaCycle.length, 1)),
+      exerciseLibrary,
     })
   }
 
@@ -1036,12 +1058,13 @@ function buildFallbackRoutine({
       pillar,
       area,
       preferredIndex: readSportSeed(sport, area, pillar) + Math.floor(fillIndex / Math.max(areaCycle.length, 1)),
+      exerciseLibrary,
     })
 
     if (added) {
       currentMainDuration = phases.reduce((sum, phase) => sum + estimatePhaseDurationMinutes(phase), 0)
       stalledPasses = 0
-    } else if (!canAddAnyExercise(phases, chosenAreas, pillar)) {
+    } else if (!canAddAnyExercise(phases, chosenAreas, pillar, exerciseLibrary)) {
       stalledPasses += areaCycle.length
     } else {
       stalledPasses += 1
@@ -1054,7 +1077,7 @@ function buildFallbackRoutine({
     const phase = phases.find((item) => item.pillar === pillar)
     if (!phase || phase.exercises.length > 0) continue
     const area = chosenAreas[0]
-    const fallbackPick = getCuratedLibrary(area, pillar)[0]
+    const fallbackPick = getCuratedLibrary(area, pillar, exerciseLibrary)[0]
     if (fallbackPick) {
       phase.exercises.push(toRoutineExercise(fallbackPick))
     }
@@ -1146,7 +1169,8 @@ export async function POST(req: NextRequest) {
     })
     const effectiveGoal = readinessModifiers.effectiveGoal
     const sessionDuration = readinessModifiers.adjustedDuration
-    const approvedExercisePool = buildApprovedExercisePoolText(targetAreas)
+    const exerciseLibrary = await getActiveExerciseLibrary(authenticatedSupabase || supabase)
+    const approvedExercisePool = buildApprovedExercisePoolTextFromLibrary(targetAreas, exerciseLibrary)
     const sportFocus = sportProfile ? sportProfile.keyDemands.join(', ') : null
     const sportRisks = sportProfile ? sportProfile.mobilityRisks.join('; ') : null
     const areasText = targetAreas.join(', ')
@@ -1154,7 +1178,7 @@ export async function POST(req: NextRequest) {
     // Build PREP phase from local library
     let prepPhase: RoutinePhase | null = null
     if (includeFoamRoll) {
-      const foamRollExercises = selectFoamRollExercises(targetAreas, sessionDuration)
+      const foamRollExercises = selectFoamRollExercises(targetAreas, sessionDuration, exerciseLibrary)
       if (foamRollExercises.length > 0) {
         prepPhase = {
           pillar: 'prep',
@@ -1184,6 +1208,7 @@ export async function POST(req: NextRequest) {
       readiness: effectiveReadiness,
       reducedTargetAreas: readinessModifiers.reducedTargetAreas,
       releaseBiasAreas: readinessModifiers.releaseBiasAreas,
+      exerciseLibrary,
     })
 
     const openAiApiKey = readOptionalEnv('OPENAI_API_KEY')
@@ -1369,6 +1394,7 @@ Respond ONLY in valid JSON (no markdown):
               effectiveGoal,
               effectiveReadiness,
               sessionDuration,
+              exerciseLibrary,
             })
           : await requestAnthropicRoutineGeneration({
               anthropic: anthropic!,
@@ -1379,6 +1405,7 @@ Respond ONLY in valid JSON (no markdown):
               effectiveGoal,
               effectiveReadiness,
               sessionDuration,
+              exerciseLibrary,
             })
 
         if (generated.tier === 'fallback') {
