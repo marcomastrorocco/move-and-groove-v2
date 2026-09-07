@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Header from '@/components/Header'
 import AdminLoginGate from '@/components/AdminLoginGate'
 import AdminPasswordCard from '@/components/AdminPasswordCard'
+import ExerciseLibraryManager from '@/components/ExerciseLibraryManager'
 import { CURATED_ROUTINE_LIBRARY, type CuratedArea, type CuratedPillar, type CuratedRoutineExerciseTemplate } from '@/lib/curated-mobility'
 import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
 import { isDemoSessionActive } from '@/lib/demo-session'
@@ -36,6 +37,15 @@ type ExerciseVideoOverride = {
   updated_at?: string | null
 }
 
+type CustomExercise = {
+  id: string | number
+  exercise_name: string
+  target_area: CuratedArea
+  pillar: CuratedPillar
+  youtube_id: string | null
+  updated_at?: string | null
+}
+
 type BulkImportSummary = {
   added: number
   skipped: number
@@ -61,6 +71,7 @@ type ExerciseAdminRow = {
   groupKey: string
   groupLabel: string
   sortOrder: number
+  source: 'curated' | 'custom'
 }
 
 const UC = 'uppercase' as const
@@ -124,6 +135,7 @@ function flattenCuratedExercises(): ExerciseAdminRow[] {
               groupKey: group.key,
               groupLabel: group.label,
               sortOrder: group.sortOrder,
+              source: 'curated',
             })
           })
         })
@@ -153,6 +165,7 @@ function flattenCuratedExercises(): ExerciseAdminRow[] {
       groupKey: group.key,
       groupLabel: group.label,
       sortOrder: group.sortOrder,
+      source: 'curated',
     })
   })
 
@@ -188,7 +201,7 @@ function normalizeYoutubeId(value: string) {
   return trimmed
 }
 
-function parseBulkMappings(text: string) {
+function parseBulkMappings(text: string, exerciseNameLookup: Map<string, string>) {
   const errors: string[] = []
   const mappings: Array<{ exerciseName: string; youtubeId: string }> = []
 
@@ -212,7 +225,7 @@ function parseBulkMappings(text: string) {
       }
 
       const rawExerciseName = parts[0].trim()
-      const normalizedName = EXERCISE_NAME_LOOKUP.get(rawExerciseName.toLowerCase())
+      const normalizedName = exerciseNameLookup.get(rawExerciseName.toLowerCase())
       const youtubeId = normalizeYoutubeId(parts.slice(1).join(',').trim())
 
       if (!normalizedName) {
@@ -234,10 +247,7 @@ function parseBulkMappings(text: string) {
   return { mappings, errors }
 }
 
-const ALL_EXERCISES = flattenCuratedExercises()
-const EXERCISE_NAME_LOOKUP = new Map(
-  ALL_EXERCISES.map((exercise) => [exercise.name.trim().toLowerCase(), exercise.name] as const),
-)
+const CURATED_EXERCISES = flattenCuratedExercises()
 
 // Local preview only. Gated on NODE_ENV === 'development' at the call site, so
 // this never becomes a way into the admin panel on a deployed build.
@@ -285,10 +295,17 @@ export default function AdminPage() {
   const [accessToken, setAccessToken] = useState('')
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [overrides, setOverrides] = useState<Record<string, ExerciseVideoOverride>>({})
+  const [customExercises, setCustomExercises] = useState<CustomExercise[]>([])
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [saveStatus, setSaveStatus] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
   const [draftYoutubeIds, setDraftYoutubeIds] = useState<Record<string, string>>({})
+  const [newExerciseName, setNewExerciseName] = useState('')
+  const [newExerciseArea, setNewExerciseArea] = useState<CuratedArea>('hips')
+  const [newExercisePillar, setNewExercisePillar] = useState<CuratedPillar>('release')
+  const [newExerciseYoutubeId, setNewExerciseYoutubeId] = useState('')
+  const [customExerciseSaving, setCustomExerciseSaving] = useState(false)
+  const [customExerciseStatus, setCustomExerciseStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [bulkDraft, setBulkDraft] = useState('')
   const [bulkSaving, setBulkSaving] = useState(false)
   const [bulkSummary, setBulkSummary] = useState<BulkImportSummary | null>(null)
@@ -300,6 +317,37 @@ export default function AdminPage() {
   const [configDrafts, setConfigDrafts] = useState<Record<EditableConfigKey, string>>(() => draftsFromConfig(DEMO_CONFIG))
   const [configStatus, setConfigStatus] = useState<Partial<Record<EditableConfigKey, ConfigStatus>>>({})
   const [demoMode, setDemoMode] = useState(false)
+
+  const allExercises = useMemo(() => {
+    const rows = [...CURATED_EXERCISES]
+    const seen = new Set(rows.map((exercise) => exercise.name.trim().toLowerCase()))
+
+    customExercises.forEach((exercise) => {
+      const normalized = exercise.exercise_name.trim().toLowerCase()
+      if (!normalized || seen.has(normalized)) {
+        return
+      }
+
+      const group = getStandardGroup(exercise.target_area, exercise.pillar)
+      rows.push({
+        name: exercise.exercise_name,
+        area: exercise.target_area,
+        pillar: exercise.pillar,
+        hardcodedYoutubeId: exercise.youtube_id || '',
+        groupKey: group.key,
+        groupLabel: group.label,
+        sortOrder: group.sortOrder,
+        source: 'custom',
+      })
+      seen.add(normalized)
+    })
+
+    return rows
+  }, [customExercises])
+
+  const exerciseNameLookup = useMemo(() => new Map(
+    allExercises.map((exercise) => [exercise.name.trim().toLowerCase(), exercise.name] as const),
+  ), [allExercises])
 
   useEffect(() => {
     let mounted = true
@@ -318,7 +366,7 @@ export default function AdminPage() {
         setConfig(DEMO_CONFIG)
         setConfigDrafts(draftsFromConfig(DEMO_CONFIG))
         setDraftYoutubeIds(
-          Object.fromEntries(ALL_EXERCISES.map((exercise) => [exercise.name, exercise.hardcodedYoutubeId || ''])),
+          Object.fromEntries(allExercises.map((exercise) => [exercise.name, exercise.hardcodedYoutubeId || ''])),
         )
         setLoading(false)
         return
@@ -354,7 +402,7 @@ export default function AdminPage() {
       setAccessToken(session.access_token)
 
       try {
-        const [overviewResponse, mappingsResponse, youtubeSyncResponse, configResponse] = await Promise.all([
+        const [overviewResponse, mappingsResponse, youtubeSyncResponse, configResponse, customExercisesResponse] = await Promise.all([
           fetch('/api/admin/overview', {
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
@@ -367,12 +415,16 @@ export default function AdminPage() {
           fetch('/api/admin/config', {
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
+          fetch('/api/admin/custom-exercises', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          }),
         ])
 
         const overviewPayload = await overviewResponse.json()
         const mappingsPayload = await mappingsResponse.json()
         const youtubeSyncPayload = await youtubeSyncResponse.json()
         const configPayload = await configResponse.json()
+        const customExercisesPayload = await customExercisesResponse.json()
 
         if (!overviewResponse.ok) {
           throw new Error(overviewPayload.error || 'Could not load admin overview.')
@@ -393,13 +445,18 @@ export default function AdminPage() {
         setOverview(overviewPayload)
         setYoutubeConfigured(Boolean(youtubeSyncPayload.configured))
         setYoutubeChannelMasked(youtubeSyncPayload.channelIdMasked || 'not configured')
+        if (customExercisesResponse.ok) {
+          setCustomExercises((customExercisesPayload.exercises as CustomExercise[]) || [])
+        } else {
+          console.warn('[admin.custom-exercises]', customExercisesPayload.error || 'Could not load custom exercises.')
+        }
         const nextOverrides = Object.fromEntries(
           (mappingsPayload.mappings as ExerciseVideoOverride[]).map((mapping) => [mapping.exercise_name, mapping]),
         )
         setOverrides(nextOverrides)
         setDraftYoutubeIds(
           Object.fromEntries(
-            ALL_EXERCISES.map((exercise) => [exercise.name, nextOverrides[exercise.name]?.youtube_id || exercise.hardcodedYoutubeId || '']),
+            allExercises.map((exercise) => [exercise.name, nextOverrides[exercise.name]?.youtube_id || exercise.hardcodedYoutubeId || '']),
           ),
         )
         setConfig(configPayload.config)
@@ -422,14 +479,14 @@ export default function AdminPage() {
 
   const filteredExercises = useMemo(() => {
     const normalized = search.trim().toLowerCase()
-    if (!normalized) return ALL_EXERCISES
+    if (!normalized) return allExercises
 
-    return ALL_EXERCISES.filter((exercise) =>
+    return allExercises.filter((exercise) =>
       exercise.name.toLowerCase().includes(normalized)
       || exercise.area.toLowerCase().includes(normalized)
       || exercise.pillar.toLowerCase().includes(normalized),
     )
-  }, [search])
+  }, [allExercises, search])
 
   const groupedExercises = useMemo(() => {
     const rowsByGroup = new Map<string, ExerciseAdminRow[]>()
@@ -502,9 +559,38 @@ export default function AdminPage() {
     }
   }
 
+  async function saveCustomExercise() {
+    if (!accessToken || customExerciseSaving) return
+    setCustomExerciseSaving(true)
+    setCustomExerciseStatus('saving')
+    setError('')
+    try {
+      const response = await fetch('/api/admin/custom-exercises', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ exerciseName: newExerciseName, targetArea: newExerciseArea, pillar: newExercisePillar, youtubeId: newExerciseYoutubeId }),
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || 'Could not save custom exercise.')
+      const nextExercise = payload.exercise as CustomExercise
+      setCustomExercises((current) => [...current.filter((exercise) => exercise.exercise_name.toLowerCase() !== nextExercise.exercise_name.toLowerCase()), nextExercise])
+      setNewExerciseName('')
+      setNewExerciseArea('hips')
+      setNewExercisePillar('release')
+      setNewExerciseYoutubeId('')
+      setCustomExerciseStatus('saved')
+      window.setTimeout(() => setCustomExerciseStatus('idle'), 1800)
+    } catch (customError) {
+      setCustomExerciseStatus('error')
+      setError(customError instanceof Error ? customError.message : 'Could not save custom exercise.')
+    } finally {
+      setCustomExerciseSaving(false)
+    }
+  }
+
   async function importBulkMappings() {
     if (demoMode) {
-      const parsed = parseBulkMappings(bulkDraft)
+      const parsed = parseBulkMappings(bulkDraft, exerciseNameLookup)
       setDraftYoutubeIds((current) => ({
         ...current,
         ...Object.fromEntries(parsed.mappings.map((mapping) => [mapping.exerciseName, mapping.youtubeId])),
@@ -532,7 +618,7 @@ export default function AdminPage() {
     setError('')
 
     try {
-      const parsed = parseBulkMappings(bulkDraft)
+      const parsed = parseBulkMappings(bulkDraft, exerciseNameLookup)
 
       if (parsed.mappings.length === 0) {
         setBulkSummary({
@@ -788,6 +874,8 @@ export default function AdminPage() {
             </div>
           </section>
 
+          {accessToken && <ExerciseLibraryManager accessToken={accessToken} />}
+
           <section style={{ marginBottom: 36 }}>
             <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 18, letterSpacing: 3, color: 'var(--white)', marginBottom: 16 }}>
               CONFIG
@@ -850,6 +938,8 @@ export default function AdminPage() {
             </div>
           </section>
 
+          {accessToken && <ExerciseLibraryManager accessToken={accessToken} />}
+
           <section style={{ marginBottom: 36 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, marginBottom: 16 }}>
               <div>
@@ -876,6 +966,95 @@ export default function AdminPage() {
               />
             </div>
             <div style={{ marginBottom: 18, border: '1px solid rgba(139,231,255,0.14)', background: 'rgba(8,10,14,0.98)', padding: '18px 18px 16px' }}>
+              <div style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.02)', padding: '16px', marginBottom: 16 }}>
+                <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 3, color: 'var(--cyan)', textTransform: UC, marginBottom: 8 }}>
+                  Add New Exercise
+                </div>
+                <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: 'var(--silver2)', lineHeight: 1.7, marginBottom: 16 }}>
+                  Add a new drill with its body region, type of work, name, and YouTube URL. It will show up in this video manager and save the video mapping at the same time.
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.4fr) 140px 140px minmax(220px, 1.2fr) 120px', gap: 12, alignItems: 'center' }}>
+                  <input
+                    value={newExerciseName}
+                    onChange={(event) => setNewExerciseName(event.target.value)}
+                    placeholder="Exercise name"
+                    style={{
+                      width: '100%',
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      color: 'var(--white)',
+                      padding: '10px 12px',
+                      fontFamily: "'DM Sans',sans-serif",
+                      fontSize: 14,
+                    }}
+                  />
+                  <select
+                    value={newExerciseArea}
+                    onChange={(event) => setNewExerciseArea(event.target.value as CuratedArea)}
+                    style={{
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      color: 'var(--white)',
+                      padding: '10px 12px',
+                      fontFamily: "'DM Mono',monospace",
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="hips">Hips</option>
+                    <option value="shoulders">Shoulders</option>
+                    <option value="spine">Spine</option>
+                  </select>
+                  <select
+                    value={newExercisePillar}
+                    onChange={(event) => setNewExercisePillar(event.target.value as CuratedPillar)}
+                    style={{
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      color: 'var(--white)',
+                      padding: '10px 12px',
+                      fontFamily: "'DM Mono',monospace",
+                      fontSize: 12,
+                    }}
+                  >
+                    <option value="release">Release</option>
+                    <option value="activation">Activation</option>
+                    <option value="range">Range</option>
+                  </select>
+                  <input
+                    value={newExerciseYoutubeId}
+                    onChange={(event) => setNewExerciseYoutubeId(event.target.value)}
+                    placeholder="YouTube URL or ID"
+                    style={{
+                      width: '100%',
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      color: 'var(--white)',
+                      padding: '10px 12px',
+                      fontFamily: "'DM Sans',sans-serif",
+                      fontSize: 14,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => { void saveCustomExercise() }}
+                    disabled={customExerciseSaving}
+                    style={{
+                      width: '100%',
+                      background: customExerciseStatus === 'saved' ? 'rgba(0,180,216,0.18)' : 'transparent',
+                      border: '1px solid rgba(0,180,216,0.28)',
+                      color: customExerciseStatus === 'error' ? '#ff9f9f' : 'var(--cyan)',
+                      padding: '10px 8px',
+                      cursor: customExerciseSaving ? 'default' : 'pointer',
+                      fontFamily: "'DM Mono',monospace",
+                      fontSize: 9,
+                      letterSpacing: 2,
+                      textTransform: UC,
+                    }}
+                  >
+                    {customExerciseSaving ? 'Saving' : customExerciseStatus === 'saved' ? 'Saved' : customExerciseStatus === 'error' ? 'Retry' : 'Add Drill'}
+                  </button>
+                </div>
+              </div>
               <div style={{ border: '1px solid rgba(0,180,216,0.16)', background: 'rgba(0,180,216,0.04)', padding: '16px 16px 14px', marginBottom: 16 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap', marginBottom: 10 }}>
                   <div>
@@ -1028,7 +1207,15 @@ export default function AdminPage() {
                     {group.exercises.map((exercise) => {
                       const override = overrides[exercise.name]
                       const activeYoutubeId = override?.youtube_id || exercise.hardcodedYoutubeId || ''
-                      const source = override?.youtube_id ? 'Supabase' : exercise.hardcodedYoutubeId ? 'Hardcoded' : 'Empty'
+                      const source = override?.youtube_id
+                        ? exercise.source === 'custom'
+                          ? 'Custom'
+                          : 'Supabase'
+                        : exercise.hardcodedYoutubeId
+                          ? 'Hardcoded'
+                          : exercise.source === 'custom'
+                            ? 'Custom'
+                            : 'Empty'
                       const status = saveStatus[exercise.name] || 'idle'
 
                       return (

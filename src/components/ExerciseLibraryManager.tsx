@@ -49,7 +49,12 @@ export default function ExerciseLibraryManager({ accessToken }: { accessToken: s
     setLoading(false)
   }
 
-  useEffect(() => { void load() }, [accessToken])
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void load() }, 0)
+    return () => window.clearTimeout(timer)
+    // Loading is intentionally restarted only when the authenticated token changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken])
 
   function update<K extends keyof FormValues>(key: K, value: FormValues[K]) {
     setForm((current) => ({ ...current, [key]: value }))

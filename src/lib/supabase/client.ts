@@ -6,6 +6,16 @@ export const isSupabaseConfigured = Boolean(
   process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
 )
 
+export function isInvalidRefreshTokenError(message?: string | null) {
+  const normalized = message?.toLowerCase() ?? ''
+
+  return (
+    normalized.includes('invalid refresh token') ||
+    normalized.includes('refresh token not found') ||
+    normalized.includes('jwt expired')
+  )
+}
+
 export function createClient() {
   if (browserClient) {
     return browserClient

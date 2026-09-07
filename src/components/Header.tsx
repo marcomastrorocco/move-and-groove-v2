@@ -1,7 +1,7 @@
 ﻿'use client'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { createClient, isInvalidRefreshTokenError } from '@/lib/supabase/client'
 import { endDemoSession, isDemoSessionActive } from '@/lib/demo-session'
 import { useEffect, useState } from 'react'
 import type { User } from '@supabase/supabase-js'
@@ -21,13 +21,58 @@ export default function Header({ homeHref }: Props = {}) {
   const [demoSession, setDemoSession] = useState(() => isDemoSessionActive())
 
   useEffect(() => {
-    supabase.auth.getUser()
-      .then(({ data }) => setUser(data.user))
-      .catch(() => setUser(null))
+    let active = true
+
+    async function restoreUser() {
+      try {
+        const { data, error } = await supabase.auth.getUser()
+
+        if (!active) {
+          return
+        }
+
+        if (error) {
+          if (isInvalidRefreshTokenError(error.message)) {
+            await supabase.auth.signOut({ scope: 'local' })
+            if (active) {
+              setUser(null)
+            }
+            return
+          }
+
+          console.warn('[Header.restoreUser] auth lookup failed', error.message)
+          setUser(null)
+          return
+        }
+
+        setUser(data.user)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+
+        if (isInvalidRefreshTokenError(message)) {
+          await supabase.auth.signOut({ scope: 'local' })
+          if (active) {
+            setUser(null)
+          }
+          return
+        }
+
+        console.warn('[Header.restoreUser] unexpected auth failure', message)
+        if (active) {
+          setUser(null)
+        }
+      }
+    }
+
+    void restoreUser()
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
       setUser(session?.user ?? null)
     })
-    return () => subscription.unsubscribe()
+
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [supabase])
 
   async function signOut() {

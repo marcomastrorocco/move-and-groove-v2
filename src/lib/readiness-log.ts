@@ -100,7 +100,7 @@ export function buildPostSessionCheckinInsert({
     soreness_level: answers.rpe ?? null,
     niggled_region: areaFocus || null,
     training_context: `post-session: completion=${answers.completion ?? 'na'}, feel=${answers.feel ?? 'na'}, rpe=${answers.rpe ?? 'na'}`,
-    intensity_modifier: answers.completion && answers.completion >= 3 ? 'completed' : 'partial',
+    intensity_modifier: answers.completion && answers.completion >= 3 ? 'normal' : 'modified',
     session_type: 'post',
     avoid_passive_holds: false,
     reduce_region: areaFocus || null,

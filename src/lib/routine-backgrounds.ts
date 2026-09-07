@@ -1,4 +1,4 @@
-type RoutineBackgroundInput = {
+﻿type RoutineBackgroundInput = {
   sport?: string | null
   areas?: string[] | null
 }

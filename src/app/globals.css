@@ -297,6 +297,38 @@ body {
   gap: 40px;
 }
 
+@media (max-width: 1100px) {
+  .mg-page-shell { padding: 44px 28px !important; }
+  .mg-dashboard-main-grid { grid-template-columns: 1fr !important; }
+  .mg-dashboard-score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .mg-dashboard-basic-score { grid-template-columns: 1fr !important; }
+  .mg-assessment-shell { padding: 44px 32px !important; }
+  .mg-assessment-test-grid,
+  .mg-assessment-grid-5 { grid-template-columns: 1fr !important; }
+}
+
+@media (max-width: 900px) {
+  .mg-page-shell { padding: 40px 22px !important; }
+  .mg-split-section { flex-direction: column !important; align-items: stretch !important; }
+  .mg-grid-3,
+  .mg-grid-4,
+  .mg-grid-5,
+  .mg-grid-7 { grid-template-columns: 1fr !important; }
+  .mg-program-choice-grid { grid-template-columns: 1fr !important; }
+  .mg-assessment-action-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+  .mg-assessment-option-row,
+  .mg-assessment-priority-card {
+    gap: 18px !important;
+  }
+  .mg-auth-section {
+    align-items: flex-start !important;
+    padding: 28px 22px !important;
+  }
+}
+
 @media (max-width: 768px) {
   .mg-page-shell { padding: 36px 18px !important; }
   .mg-split-section { flex-direction: column !important; align-items: stretch !important; }

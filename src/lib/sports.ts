@@ -19,7 +19,7 @@ export const SPORT_PROFILES: SportProfile[] = [
     lastReviewed: '2026-04-16',
     keyDemands: ['hip rotation', 'thoracic rotation', 'shoulder turn', 'lateral flexion'],
     mobilityRisks: ['limited hip turn can increase lumbar loading', 'restricted thoracic rotation can reduce swing separation'],
-    targetAreas: ['hips', 'spine', 'shoulders'],
+    targetAreas: ['spine', 'hips', 'shoulders'],
     routineBias: 'Open up rotation first, then build controlled trunk and shoulder range for cleaner swing mechanics.',
   },
   {
@@ -29,7 +29,7 @@ export const SPORT_PROFILES: SportProfile[] = [
     lastReviewed: '2026-04-16',
     keyDemands: ['hip mobility', 'ankle dorsiflexion', 'shoulder overhead range', 'thoracic rotation'],
     mobilityRisks: ['stiff hips and ankles can affect change of direction and kicking mechanics', 'restricted thoracic or shoulder range can reduce overhead freedom'],
-    targetAreas: ['hips', 'spine', 'shoulders'],
+    targetAreas: ['hips', 'shoulders', 'spine'],
     routineBias: 'Bias the session toward hips and trunk first, then support overhead and running mechanics.',
   },
   {
@@ -207,4 +207,3 @@ export const SPORT_PROFILES: SportProfile[] = [
 export const SPORT_PROFILE_MAP = Object.fromEntries(
   SPORT_PROFILES.map((profile) => [profile.id, profile]),
 ) as Record<string, SportProfile>
-
