@@ -190,9 +190,7 @@ export function getStaticExerciseSeed(): Omit<ExerciseRecord, 'id' | 'youtube_id
           anatomical_quadrants: exercise.anatomicalQuadrants,
           rationale: exercise.rationale,
           study_citation: exercise.study,
-          aliases: exercise.aliases || [],
-          created_at: undefined,
-          updated_at: undefined,
+        aliases: exercise.aliases || [],
         } as Omit<ExerciseRecord, 'id' | 'youtube_id' | 'is_active'>)
       }
     }
@@ -210,9 +208,7 @@ export function getStaticExerciseSeed(): Omit<ExerciseRecord, 'id' | 'youtube_id
         anatomical_quadrants: exercise.anatomicalQuadrants,
         rationale: exercise.rationale,
         study_citation: exercise.study,
-        aliases: exercise.aliases || [],
-        created_at: undefined,
-        updated_at: undefined,
+          aliases: exercise.aliases || [],
       } as Omit<ExerciseRecord, 'id' | 'youtube_id' | 'is_active'>)
     }
   }
