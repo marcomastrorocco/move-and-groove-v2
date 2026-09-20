@@ -47,6 +47,49 @@ export async function PUT(req: NextRequest, { params }: Context) {
   }
 }
 
+// The video manager only needs to rename an exercise. Keep that small action
+// separate from the full editor so an admin does not have to resubmit every
+// programming field just to correct a title.
+export async function PATCH(req: NextRequest, { params }: Context) {
+  try {
+    const { serviceClient } = await requireAdminAccess(req)
+    const { id } = await params
+    const name = text((await req.json() as Record<string, unknown>).name)
+    if (!name) throw new Error('Exercise name is required.')
+
+    const { data: current, error: currentError } = await serviceClient
+      .from('exercises')
+      .select('area, phase')
+      .eq('id', id)
+      .single()
+    if (currentError) throw new Error(currentError.message)
+
+    const { data: duplicate, error: duplicateError } = await serviceClient
+      .from('exercises')
+      .select('id')
+      .ilike('name', name)
+      .eq('area', current.area)
+      .eq('phase', current.phase)
+      .neq('id', id)
+      .maybeSingle()
+    if (duplicateError) throw new Error(duplicateError.message)
+    if (duplicate) throw new Error('An exercise with this name already exists in this area and phase.')
+
+    const { data, error } = await serviceClient
+      .from('exercises')
+      .update({ name })
+      .eq('id', id)
+      .select('id, name')
+      .single()
+    if (error) throw new Error(error.message)
+    invalidateExerciseLibraryCache()
+    return NextResponse.json({ exercise: data })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Could not rename exercise.'
+    return NextResponse.json({ error: message }, { status: message.includes('Admin') ? 401 : 400 })
+  }
+}
+
 export async function DELETE(req: NextRequest, { params }: Context) {
   try {
     const { serviceClient } = await requireAdminAccess(req)
