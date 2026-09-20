@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getStaticExerciseSeed, invalidateExerciseLibraryCache, type ExerciseArea, type ExercisePhase } from '@/lib/exercise-library'
 import { requireAdminAccess } from '@/lib/supabase/admin'
+import { getExerciseVideo } from '@/lib/exercise-videos'
 
 type ExercisePayload = {
   name?: unknown
@@ -137,10 +138,19 @@ export async function PUT(req: NextRequest) {
     if (!body.seed) return NextResponse.json({ error: 'Use the exercise ID route to edit an exercise.' }, { status: 400 })
 
     const seed = getStaticExerciseSeed().map((exercise) => ({ ...exercise, is_active: true }))
+    // Check the destination before consulting optional legacy video mappings.
+    const { error: libraryError } = await serviceClient.from('exercises').select('id').limit(1)
+    if (libraryError) {
+      if (libraryError.code === '42P01' || libraryError.code === 'PGRST205') {
+        return NextResponse.json({ error: 'Exercise library database setup is missing. Run supabase/migrations/20260907_exercise_library.sql in the Supabase SQL Editor, then retry saving.', code: 'EXERCISE_LIBRARY_SETUP_REQUIRED' }, { status: 503 })
+      }
+      throw new Error(libraryError.message)
+    }
     const { data: videoRows, error: videoError } = await serviceClient.from('exercise_videos').select('exercise_name, youtube_id')
-    if (videoError) throw new Error(videoError.message)
+    // Older projects may not have this optional override table.
+    if (videoError && videoError.code !== '42P01' && videoError.code !== 'PGRST205') throw new Error(videoError.message)
     const videoByName = new Map((videoRows || []).map((row) => [row.exercise_name.toLowerCase(), row.youtube_id]))
-    const rows = seed.map((exercise) => ({ ...exercise, youtube_id: videoByName.get(exercise.name.toLowerCase()) || null }))
+    const rows = seed.map((exercise) => ({ ...exercise, youtube_id: videoByName.get(exercise.name.toLowerCase()) || getExerciseVideo(exercise.name)?.youtubeVideoId || null }))
     const { data, error } = await serviceClient.from('exercises').upsert(rows, { onConflict: 'name,area,phase', ignoreDuplicates: true }).select('id')
     if (error) throw new Error(error.message)
     invalidateExerciseLibraryCache()

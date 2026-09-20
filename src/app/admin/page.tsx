@@ -303,6 +303,7 @@ export default function AdminPage() {
   const [draftYoutubeIds, setDraftYoutubeIds] = useState<Record<string, string>>({})
   const [draftExerciseNames, setDraftExerciseNames] = useState<Record<string, string>>({})
   const [nameSaveStatus, setNameSaveStatus] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
+  const [nameSaveErrors, setNameSaveErrors] = useState<Record<string, string>>({})
   const [bulkDraft, setBulkDraft] = useState('')
   const [bulkSaving, setBulkSaving] = useState(false)
   const [bulkSummary, setBulkSummary] = useState<BulkImportSummary | null>(null)
@@ -560,6 +561,7 @@ export default function AdminPage() {
     if (!nextName || nextName === exercise.name || !accessToken) return
 
     setNameSaveStatus((current) => ({ ...current, [key]: 'saving' }))
+    setNameSaveErrors((current) => ({ ...current, [key]: '' }))
     setError('')
     try {
       let id = exercise.id
@@ -602,7 +604,9 @@ export default function AdminPage() {
       window.setTimeout(() => setNameSaveStatus((current) => ({ ...current, [id!]: 'idle' })), 1800)
     } catch (nameError) {
       setNameSaveStatus((current) => ({ ...current, [key]: 'error' }))
-      setError(nameError instanceof Error ? nameError.message : 'Could not rename exercise.')
+      const message = nameError instanceof Error ? nameError.message : 'Could not rename exercise.'
+      setNameSaveErrors((current) => ({ ...current, [key]: message }))
+      setError(message)
     }
   }
 
@@ -1171,6 +1175,7 @@ export default function AdminPage() {
                                 {nameStatus === 'saving' ? '...' : nameStatus === 'saved' ? 'SAVED' : nameStatus === 'error' ? 'RETRY' : 'SAVE'}
                               </button>
                             </div>
+                            {nameSaveErrors[nameKey] && <div role="alert" style={{ color: '#ff9f9f', fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>{nameSaveErrors[nameKey]}</div>}
                           </div>
                           <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 2, color: 'var(--cyan)', textTransform: UC }}>
                             {exercise.area}
