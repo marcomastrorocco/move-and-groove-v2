@@ -31,7 +31,7 @@ function toForm(exercise: Exercise): FormValues {
   return { name: exercise.name, area: exercise.area, phase: exercise.phase, sets: String(exercise.sets), reps: exercise.reps?.toString() || '', holdSeconds: exercise.hold_seconds?.toString() || '', movementPattern: exercise.movement_pattern || '', anatomicalQuadrants: exercise.anatomical_quadrants.join(', '), rationale: exercise.rationale, studyCitation: exercise.study_citation, aliases: exercise.aliases.join(', '), youtubeId: exercise.youtube_id || '', isActive: exercise.is_active }
 }
 
-export default function ExerciseLibraryManager({ accessToken }: { accessToken: string }) {
+export default function ExerciseLibraryManager({ accessToken, onLibraryChange }: { accessToken: string; onLibraryChange?: (exercises: Exercise[]) => void }) {
   const [exercises, setExercises] = useState<Exercise[]>([])
   const [form, setForm] = useState<FormValues>(emptyForm)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -44,11 +44,17 @@ export default function ExerciseLibraryManager({ accessToken }: { accessToken: s
 
   async function load() {
     setLoading(true)
-    const response = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
-    const payload = await response.json()
-    if (!response.ok) setMessage(payload.error || 'Could not load the exercise library.')
-    else setExercises(payload.exercises || [])
-    setLoading(false)
+    try {
+      const response = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || 'Could not load the exercise library.')
+      setExercises(payload.exercises || [])
+      onLibraryChange?.(payload.exercises || [])
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not load the exercise library.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -107,6 +113,7 @@ export default function ExerciseLibraryManager({ accessToken }: { accessToken: s
       setExercises((current) => current.map((item) => item.id === exercise.id ? { ...item, name: result.exercise.name } : item))
       setNameDrafts((current) => ({ ...current, [exercise.id]: result.exercise.name }))
       setMessage('Exercise name updated.')
+      await load()
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not rename exercise.')
     } finally {
