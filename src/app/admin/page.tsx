@@ -555,17 +555,32 @@ export default function AdminPage() {
   }
 
   async function saveExerciseName(exercise: ExerciseAdminRow) {
-    if (!exercise.id) {
-      setError('Import the current library in Exercise Library before renaming a hardcoded exercise.')
-      return
-    }
-    const nextName = (draftExerciseNames[exercise.id] ?? exercise.name).trim()
+    const key = exercise.id || exercise.groupKey + ':' + exercise.name
+    const nextName = (draftExerciseNames[key] ?? exercise.name).trim()
     if (!nextName || nextName === exercise.name || !accessToken) return
 
-    setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'saving' }))
+    setNameSaveStatus((current) => ({ ...current, [key]: 'saving' }))
     setError('')
     try {
-      const response = await fetch(`/api/admin/exercises/${exercise.id}`, {
+      let id = exercise.id
+      let library = managedExercises
+      if (!id) {
+        const imported = await fetch('/api/admin/exercises', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({ seed: true }),
+        })
+        const importResult = await imported.json()
+        if (!imported.ok) throw new Error(importResult.error || 'Could not prepare the exercise library for editing.')
+        const loaded = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
+        const result = await loaded.json()
+        if (!loaded.ok) throw new Error(result.error || 'Could not load exercises.')
+        library = result.exercises || []
+        const phase = exercise.groupKey.startsWith('foam-roll-') ? 'foam_roll' : exercise.pillar
+        id = library.find((item) => item.name === exercise.name && item.area === exercise.area && item.phase === phase)?.id
+        if (!id) throw new Error('Exercise was not found in the library. Please refresh and try again.')
+      }
+      const response = await fetch(`/api/admin/exercises/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
         body: JSON.stringify({ name: nextName }),
@@ -573,8 +588,8 @@ export default function AdminPage() {
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || 'Could not rename exercise.')
 
-      setManagedExercises((current) => current.map((item) => item.id === exercise.id ? { ...item, name: payload.exercise.name } : item))
-      setDraftExerciseNames((current) => ({ ...current, [exercise.id!]: payload.exercise.name }))
+      setManagedExercises(library.map((item) => item.id === id ? { ...item, name: payload.exercise.name } : item))
+      setDraftExerciseNames((current) => ({ ...current, [id!]: payload.exercise.name }))
       setDraftYoutubeIds((current) => {
         const { [exercise.name]: previous, ...remaining } = current
         return { ...remaining, [payload.exercise.name]: previous ?? exercise.hardcodedYoutubeId }
@@ -583,10 +598,10 @@ export default function AdminPage() {
         const { [exercise.name]: previous, ...remaining } = current
         return previous ? { ...remaining, [payload.exercise.name]: { ...previous, exercise_name: payload.exercise.name } } : remaining
       })
-      setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'saved' }))
-      window.setTimeout(() => setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'idle' })), 1800)
+      setNameSaveStatus((current) => ({ ...current, [key]: 'idle', [id!]: 'saved' }))
+      window.setTimeout(() => setNameSaveStatus((current) => ({ ...current, [id!]: 'idle' })), 1800)
     } catch (nameError) {
-      setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'error' }))
+      setNameSaveStatus((current) => ({ ...current, [key]: 'error' }))
       setError(nameError instanceof Error ? nameError.message : 'Could not rename exercise.')
     }
   }
@@ -1131,8 +1146,9 @@ export default function AdminPage() {
                             ? 'Custom'
                             : 'Empty'
                       const status = saveStatus[exercise.name] || 'idle'
-                      const nameStatus = exercise.id ? nameSaveStatus[exercise.id] || 'idle' : 'idle'
-                      const draftName = exercise.id ? draftExerciseNames[exercise.id] ?? exercise.name : exercise.name
+                      const nameKey = exercise.id || exercise.groupKey + ':' + exercise.name
+                      const nameStatus = nameSaveStatus[nameKey] || 'idle'
+                      const draftName = draftExerciseNames[nameKey] ?? exercise.name
 
                       return (
                         <div key={exercise.name} style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.4fr) 110px 110px 140px minmax(220px, 1fr) 92px', gap: 12, padding: '15px 18px', borderBottom: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
@@ -1141,14 +1157,14 @@ export default function AdminPage() {
                               <input
                                 aria-label={`${exercise.name} exercise name`}
                                 value={draftName}
-                                disabled={!exercise.id}
-                                onChange={(event) => exercise.id && setDraftExerciseNames((current) => ({ ...current, [exercise.id!]: event.target.value }))}
-                                title={exercise.id ? 'Edit exercise name' : 'Import the current library before renaming this exercise'}
+                                disabled={Object.values(nameSaveStatus).includes('saving')}
+                                onChange={(event) => setDraftExerciseNames((current) => ({ ...current, [nameKey]: event.target.value }))}
+                                title="Edit exercise name"
                                 style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--white)', padding: '9px 10px', fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}
                               />
                               <button
                                 type="button"
-                                disabled={!exercise.id || nameStatus === 'saving' || draftName.trim() === exercise.name}
+                                disabled={Object.values(nameSaveStatus).includes('saving') || !draftName.trim() || draftName.trim() === exercise.name}
                                 onClick={() => { void saveExerciseName(exercise) }}
                                 style={{ background: nameStatus === 'saved' ? 'rgba(0,180,216,0.18)' : 'transparent', border: '1px solid rgba(0,180,216,0.28)', color: nameStatus === 'error' ? '#ff9f9f' : 'var(--cyan)', padding: '8px', cursor: exercise.id ? 'pointer' : 'not-allowed', fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 1 }}
                               >

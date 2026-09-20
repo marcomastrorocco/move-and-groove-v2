@@ -141,7 +141,7 @@ export async function PUT(req: NextRequest) {
     if (videoError) throw new Error(videoError.message)
     const videoByName = new Map((videoRows || []).map((row) => [row.exercise_name.toLowerCase(), row.youtube_id]))
     const rows = seed.map((exercise) => ({ ...exercise, youtube_id: videoByName.get(exercise.name.toLowerCase()) || null }))
-    const { data, error } = await serviceClient.from('exercises').upsert(rows, { onConflict: 'name,area,phase' }).select('id')
+    const { data, error } = await serviceClient.from('exercises').upsert(rows, { onConflict: 'name,area,phase', ignoreDuplicates: true }).select('id')
     if (error) throw new Error(error.message)
     invalidateExerciseLibraryCache()
     return NextResponse.json({ seeded: data?.length || 0 })
