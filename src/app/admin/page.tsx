@@ -64,6 +64,7 @@ type YoutubeSyncResult = {
 }
 
 type ExerciseAdminRow = {
+  id?: string
   name: string
   area: CuratedArea
   pillar: CuratedPillar
@@ -71,7 +72,15 @@ type ExerciseAdminRow = {
   groupKey: string
   groupLabel: string
   sortOrder: number
-  source: 'curated' | 'custom'
+  source: 'curated' | 'custom' | 'supabase'
+}
+
+type ManagedExercise = {
+  id: string
+  name: string
+  area: CuratedArea
+  phase: CuratedPillar | 'foam_roll'
+  youtube_id: string | null
 }
 
 const UC = 'uppercase' as const
@@ -296,10 +305,13 @@ export default function AdminPage() {
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [overrides, setOverrides] = useState<Record<string, ExerciseVideoOverride>>({})
   const [customExercises, setCustomExercises] = useState<CustomExercise[]>([])
+  const [managedExercises, setManagedExercises] = useState<ManagedExercise[]>([])
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
   const [saveStatus, setSaveStatus] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
   const [draftYoutubeIds, setDraftYoutubeIds] = useState<Record<string, string>>({})
+  const [draftExerciseNames, setDraftExerciseNames] = useState<Record<string, string>>({})
+  const [nameSaveStatus, setNameSaveStatus] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({})
   const [newExerciseName, setNewExerciseName] = useState('')
   const [newExerciseArea, setNewExerciseArea] = useState<CuratedArea>('hips')
   const [newExercisePillar, setNewExercisePillar] = useState<CuratedPillar>('release')
@@ -319,6 +331,27 @@ export default function AdminPage() {
   const [demoMode, setDemoMode] = useState(false)
 
   const allExercises = useMemo(() => {
+    // Once the library has been imported, it is the source of truth. This also
+    // makes names changed in the admin panel persist after a refresh.
+    if (managedExercises.length > 0) {
+      return managedExercises.map((exercise) => {
+        const group = exercise.phase === 'foam_roll'
+          ? getFoamRollGroup(exercise.area)
+          : getStandardGroup(exercise.area, exercise.phase)
+        return {
+          id: exercise.id,
+          name: exercise.name,
+          area: exercise.area,
+          pillar: exercise.phase === 'foam_roll' ? 'activation' : exercise.phase,
+          hardcodedYoutubeId: exercise.youtube_id || '',
+          groupKey: group.key,
+          groupLabel: group.label,
+          sortOrder: group.sortOrder,
+          source: 'supabase' as const,
+        }
+      })
+    }
+
     const rows = [...CURATED_EXERCISES]
     const seen = new Set(rows.map((exercise) => exercise.name.trim().toLowerCase()))
 
@@ -343,7 +376,7 @@ export default function AdminPage() {
     })
 
     return rows
-  }, [customExercises])
+  }, [customExercises, managedExercises])
 
   const exerciseNameLookup = useMemo(() => new Map(
     allExercises.map((exercise) => [exercise.name.trim().toLowerCase(), exercise.name] as const),
@@ -402,7 +435,7 @@ export default function AdminPage() {
       setAccessToken(session.access_token)
 
       try {
-        const [overviewResponse, mappingsResponse, youtubeSyncResponse, configResponse, customExercisesResponse] = await Promise.all([
+        const [overviewResponse, mappingsResponse, youtubeSyncResponse, configResponse, customExercisesResponse, exercisesResponse] = await Promise.all([
           fetch('/api/admin/overview', {
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
@@ -418,6 +451,9 @@ export default function AdminPage() {
           fetch('/api/admin/custom-exercises', {
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
+          fetch('/api/admin/exercises', {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+          }),
         ])
 
         const overviewPayload = await overviewResponse.json()
@@ -425,6 +461,7 @@ export default function AdminPage() {
         const youtubeSyncPayload = await youtubeSyncResponse.json()
         const configPayload = await configResponse.json()
         const customExercisesPayload = await customExercisesResponse.json()
+        const exercisesPayload = await exercisesResponse.json()
 
         if (!overviewResponse.ok) {
           throw new Error(overviewPayload.error || 'Could not load admin overview.')
@@ -443,6 +480,9 @@ export default function AdminPage() {
         if (!mounted) return
 
         setOverview(overviewPayload)
+        if (exercisesResponse.ok) {
+          setManagedExercises((exercisesPayload.exercises as ManagedExercise[]) || [])
+        }
         setYoutubeConfigured(Boolean(youtubeSyncPayload.configured))
         setYoutubeChannelMasked(youtubeSyncPayload.channelIdMasked || 'not configured')
         if (customExercisesResponse.ok) {
@@ -556,6 +596,43 @@ export default function AdminPage() {
     } catch (saveError) {
       setSaveStatus((current) => ({ ...current, [exerciseName]: 'error' }))
       setError(saveError instanceof Error ? saveError.message : 'Could not save exercise video mapping.')
+    }
+  }
+
+  async function saveExerciseName(exercise: ExerciseAdminRow) {
+    if (!exercise.id) {
+      setError('Import the current library in Exercise Library before renaming a hardcoded exercise.')
+      return
+    }
+    const nextName = (draftExerciseNames[exercise.id] ?? exercise.name).trim()
+    if (!nextName || nextName === exercise.name || !accessToken) return
+
+    setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'saving' }))
+    setError('')
+    try {
+      const response = await fetch(`/api/admin/exercises/${exercise.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ name: nextName }),
+      })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error || 'Could not rename exercise.')
+
+      setManagedExercises((current) => current.map((item) => item.id === exercise.id ? { ...item, name: payload.exercise.name } : item))
+      setDraftExerciseNames((current) => ({ ...current, [exercise.id!]: payload.exercise.name }))
+      setDraftYoutubeIds((current) => {
+        const { [exercise.name]: previous, ...remaining } = current
+        return { ...remaining, [payload.exercise.name]: previous ?? exercise.hardcodedYoutubeId }
+      })
+      setOverrides((current) => {
+        const { [exercise.name]: previous, ...remaining } = current
+        return previous ? { ...remaining, [payload.exercise.name]: { ...previous, exercise_name: payload.exercise.name } } : remaining
+      })
+      setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'saved' }))
+      window.setTimeout(() => setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'idle' })), 1800)
+    } catch (nameError) {
+      setNameSaveStatus((current) => ({ ...current, [exercise.id!]: 'error' }))
+      setError(nameError instanceof Error ? nameError.message : 'Could not rename exercise.')
     }
   }
 
@@ -1191,7 +1268,7 @@ export default function AdminPage() {
             </div>
             <div style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(8,10,14,0.98)' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.4fr) 110px 110px 140px minmax(220px, 1fr) 92px', gap: 12, padding: '14px 18px', borderBottom: '1px solid rgba(255,255,255,0.08)', fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 3, color: 'var(--silver3)', textTransform: UC }}>
-                <div>Exercise</div>
+                <div>Exercise name</div>
                 <div>Area</div>
                 <div>Phase</div>
                 <div>Source</div>
@@ -1217,12 +1294,29 @@ export default function AdminPage() {
                             ? 'Custom'
                             : 'Empty'
                       const status = saveStatus[exercise.name] || 'idle'
+                      const nameStatus = exercise.id ? nameSaveStatus[exercise.id] || 'idle' : 'idle'
+                      const draftName = exercise.id ? draftExerciseNames[exercise.id] ?? exercise.name : exercise.name
 
                       return (
                         <div key={exercise.name} style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1.4fr) 110px 110px 140px minmax(220px, 1fr) 92px', gap: 12, padding: '15px 18px', borderBottom: '1px solid rgba(255,255,255,0.05)', alignItems: 'center' }}>
                           <div>
-                            <div style={{ fontFamily: "'DM Sans',sans-serif", fontSize: 14, color: 'var(--white)', lineHeight: 1.45 }}>
-                              {exercise.name}
+                            <div style={{ display: 'flex', gap: 7 }}>
+                              <input
+                                aria-label={`${exercise.name} exercise name`}
+                                value={draftName}
+                                disabled={!exercise.id}
+                                onChange={(event) => exercise.id && setDraftExerciseNames((current) => ({ ...current, [exercise.id!]: event.target.value }))}
+                                title={exercise.id ? 'Edit exercise name' : 'Import the current library before renaming this exercise'}
+                                style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--white)', padding: '9px 10px', fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}
+                              />
+                              <button
+                                type="button"
+                                disabled={!exercise.id || nameStatus === 'saving' || draftName.trim() === exercise.name}
+                                onClick={() => { void saveExerciseName(exercise) }}
+                                style={{ background: nameStatus === 'saved' ? 'rgba(0,180,216,0.18)' : 'transparent', border: '1px solid rgba(0,180,216,0.28)', color: nameStatus === 'error' ? '#ff9f9f' : 'var(--cyan)', padding: '8px', cursor: exercise.id ? 'pointer' : 'not-allowed', fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 1 }}
+                              >
+                                {nameStatus === 'saving' ? '...' : nameStatus === 'saved' ? 'SAVED' : nameStatus === 'error' ? 'RETRY' : 'SAVE'}
+                              </button>
                             </div>
                           </div>
                           <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 2, color: 'var(--cyan)', textTransform: UC }}>
