@@ -53,9 +53,18 @@ export async function PATCH(req: NextRequest, { params }: Context) {
   try {
     const { serviceClient } = await requireAdminAccess(req)
     const { id } = await params
-    const body = await req.json() as Record<string, unknown>
-    const changesName = Object.prototype.hasOwnProperty.call(body, 'name')
-    const changesActiveStatus = Object.prototype.hasOwnProperty.call(body, 'isActive')
+    const body: unknown = await req.json()
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json({ error: 'PATCH body must be an object.' }, { status: 400 })
+    }
+
+    const patch = body as Record<string, unknown>
+    const unsupportedFields = Object.keys(patch).filter((key) => key !== 'name' && key !== 'isActive')
+    if (unsupportedFields.length > 0) {
+      return NextResponse.json({ error: 'Only name and isActive can be updated here.' }, { status: 400 })
+    }
+    const changesName = Object.prototype.hasOwnProperty.call(patch, 'name')
+    const changesActiveStatus = Object.prototype.hasOwnProperty.call(patch, 'isActive')
 
     if (!changesName && !changesActiveStatus) {
       return NextResponse.json({ error: 'Provide a name or active status.' }, { status: 400 })
@@ -64,7 +73,7 @@ export async function PATCH(req: NextRequest, { params }: Context) {
     const updates: { name?: string; is_active?: boolean } = {}
 
     if (changesName) {
-      const name = text(body.name)
+      const name = text(patch.name)
       if (!name) return NextResponse.json({ error: 'Exercise name is required.' }, { status: 400 })
 
       const { data: current, error: currentError } = await serviceClient
@@ -89,10 +98,10 @@ export async function PATCH(req: NextRequest, { params }: Context) {
     }
 
     if (changesActiveStatus) {
-      if (typeof body.isActive !== 'boolean') {
+      if (typeof patch.isActive !== 'boolean') {
         return NextResponse.json({ error: 'isActive must be true or false.' }, { status: 400 })
       }
-      updates.is_active = body.isActive
+      updates.is_active = patch.isActive
     }
 
     const { data, error } = await serviceClient
