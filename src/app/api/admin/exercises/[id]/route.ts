@@ -28,7 +28,8 @@ function validate(body: Record<string, unknown>) {
   if ((reps === null) === (hold === null) || (reps !== null && reps < 6) || (hold !== null && hold < 20)) throw new Error('Use either at least 6 reps or at least a 20 second hold.')
   if (movement && !['rotational', 'linear', 'lateral'].includes(movement)) throw new Error('Invalid movement pattern.')
   if (youtube && !videoId(youtube)) throw new Error('Invalid YouTube URL or ID.')
-  return { name, area, phase, sets, reps, hold_seconds: hold, movement_pattern: movement || null, anatomical_quadrants: array(body.anatomicalQuadrants), rationale: text(body.rationale), study_citation: text(body.studyCitation), aliases: array(body.aliases), youtube_id: videoId(youtube), is_active: typeof body.isActive === 'boolean' ? body.isActive : true }
+  if (typeof body.isActive !== 'boolean') throw new Error('Active status must be true or false.')
+  return { name, area, phase, sets, reps, hold_seconds: hold, movement_pattern: movement || null, anatomical_quadrants: array(body.anatomicalQuadrants), rationale: text(body.rationale), study_citation: text(body.studyCitation), aliases: array(body.aliases), youtube_id: videoId(youtube), is_active: body.isActive }
 }
 
 async function guardLastActiveSlot(

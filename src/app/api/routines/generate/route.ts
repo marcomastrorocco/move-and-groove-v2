@@ -298,26 +298,47 @@ function finalizeGeneratedRoutine({
   sessionDuration: number
   exerciseLibrary: ExerciseLibrary
 }) {
+  const parsedRoutine = JSON.parse(rawJson) as GeneratedRoutine
+  if (!Array.isArray(parsedRoutine.phases)) {
+    throw new Error('AI routine has no valid phases')
+  }
+  const suppliedPrepCount = parsedRoutine.phases.filter((phase) => phase?.pillar === 'prep').length
+  if (suppliedPrepCount > 0) {
+    console.warn(`[generate.guardrail] ignored ${suppliedPrepCount} AI-supplied prep phase(s); using curated prep`)
+  }
+  const mainPhases = parsedRoutine.phases.filter((phase) => phase?.pillar !== 'prep')
   const routine = normalizeRoutineExerciseNames(
     normalizeRoutineForGoal(
-      JSON.parse(rawJson) as GeneratedRoutine,
+      { ...parsedRoutine, phases: mainPhases },
       { goal: effectiveGoal, readiness: effectiveReadiness },
     ),
     targetAreas,
     exerciseLibrary,
   )
 
-  const containsUnapprovedExercise = routine.phases.some((phase) => {
+  routine.totalExercises = routine.phases.reduce((total, phase) => total + phase.exercises.length, 0)
+
+  for (const phase of routine.phases) {
     const pillar = phase.pillar
-    if (pillar === 'prep') return true
-    return phase.exercises.some((exercise) => {
-      if (!(exercise.targetArea in exerciseLibrary.routine)) return true
-      const area = exercise.targetArea as keyof typeof exerciseLibrary.routine
-      return !exerciseLibrary.routine[area][pillar].some((approved) => approved.name === exercise.name)
-    })
-  })
-  if (containsUnapprovedExercise) {
-    throw new Error('AI routine included an exercise outside the active library')
+    if (pillar !== 'release' && pillar !== 'activation' && pillar !== 'range') {
+      const first = phase.exercises[0]
+      console.warn('[generate.guardrail] rejected AI exercise', {
+        name: first?.name || '(none)', area: first?.targetArea || '(none)', pillar,
+      })
+      throw new Error('AI routine included an unsupported phase')
+    }
+    for (const exercise of phase.exercises) {
+      const area = exercise.targetArea
+      const approved = area in exerciseLibrary.routine
+        ? exerciseLibrary.routine[area as keyof typeof exerciseLibrary.routine][pillar]
+        : []
+      if (!approved.some((candidate) => candidate.name === exercise.name)) {
+        console.warn('[generate.guardrail] rejected AI exercise', {
+          name: exercise.name, area, pillar,
+        })
+        throw new Error('AI routine included an exercise outside the active library')
+      }
+    }
   }
 
   if (prepPhase) {
