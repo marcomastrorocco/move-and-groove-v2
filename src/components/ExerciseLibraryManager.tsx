@@ -89,12 +89,18 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
     setEditingId(null); setForm(emptyForm()); await load()
   }
 
-  async function deactivate(exercise: Exercise) {
-    if (!window.confirm(`Deactivate ${exercise.name}? Existing saved routines remain unchanged.`)) return
-    const response = await fetch(`/api/admin/exercises/${exercise.id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } })
+  async function setActiveStatus(exercise: Exercise, isActive: boolean) {
+    const action = isActive ? 'Reactivate' : 'Deactivate'
+    if (!window.confirm(`${action} ${exercise.name}? Existing saved routines remain unchanged.`)) return
+    const response = await fetch(`/api/admin/exercises/${exercise.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ isActive }),
+    })
     const result = await response.json()
-    if (!response.ok) { setMessage(result.error || 'Could not deactivate exercise.'); return }
-    setMessage(`${exercise.name} deactivated.`); await load()
+    if (!response.ok) { setMessage(result.error || 'Could not update exercise status.'); return }
+    setExercises((current) => current.map((item) => item.id === exercise.id ? { ...item, is_active: result.exercise.is_active } : item))
+    setMessage(`${exercise.name} ${isActive ? 'reactivated' : 'deactivated'}.`)
   }
 
   async function rename(exercise: Exercise) {
@@ -151,12 +157,32 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
           <textarea style={{ ...fieldStyle, minHeight: 62 }} value={form.studyCitation} onChange={(event) => update('studyCitation', event.target.value)} placeholder="Study citation" />
           <input style={fieldStyle} value={form.aliases} onChange={(event) => update('aliases', event.target.value)} placeholder="Aliases, comma separated" />
           <input style={fieldStyle} value={form.youtubeId} onChange={(event) => update('youtubeId', event.target.value)} placeholder="YouTube URL or ID" />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--silver2)', fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={form.isActive} onChange={(event) => update('isActive', event.target.checked)} /> Active</label>
           <div style={{ display: 'flex', gap: 10 }}><button type="button" onClick={() => { void save() }} disabled={saving} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer', color: 'var(--cyan)' }}>{saving ? 'SAVING' : editingId ? 'SAVE CHANGES' : 'ADD EXERCISE'}</button>{editingId && <button type="button" onClick={() => { setEditingId(null); setForm(emptyForm()) }} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer' }}>CANCEL</button>}</div>
         </div>
       </div>
       <div style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(8,10,14,0.96)' }}>
         <div style={{ padding: 14, borderBottom: '1px solid rgba(255,255,255,0.08)' }}><input style={fieldStyle} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter by exercise, area, or phase" /></div>
-        <div style={{ maxHeight: 620, overflowY: 'auto' }}>{loading ? <div style={{ padding: 20, color: 'var(--silver2)' }}>Loading library...</div> : filtered.map((exercise) => <div key={exercise.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(190px,1fr) 110px 100px 110px auto', gap: 10, padding: '13px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', alignItems: 'center', opacity: exercise.is_active ? 1 : 0.5 }}><div><div style={{ display: 'flex', gap: 6 }}><input aria-label={`${exercise.name} exercise name`} value={nameDrafts[exercise.id] ?? exercise.name} onChange={(event) => setNameDrafts((current) => ({ ...current, [exercise.id]: event.target.value }))} style={{ ...fieldStyle, padding: '7px 9px' }} /><button type="button" onClick={() => { void rename(exercise) }} disabled={renamingId === exercise.id || (nameDrafts[exercise.id] ?? exercise.name).trim() === exercise.name} style={{ ...fieldStyle, width: 'auto', padding: '7px 8px', cursor: 'pointer', color: 'var(--cyan)' }}>{renamingId === exercise.id ? '...' : 'SAVE'}</button></div><div style={{ color: 'var(--silver3)', fontFamily: "'DM Mono',monospace", fontSize: 10, marginTop: 4 }}>{exercise.reps ? `${exercise.sets} x ${exercise.reps} reps` : `${exercise.sets} x ${exercise.hold_seconds}s`}</div></div><div style={{ color: 'var(--cyan)', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.area}</div><div style={{ color: 'var(--silver2)', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.phase.replace('_', ' ')}</div><div style={{ color: exercise.is_active ? 'var(--cyan)' : '#ffb6b6', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.is_active ? 'ACTIVE' : 'INACTIVE'}</div><div style={{ display: 'flex', gap: 6 }}><button type="button" onClick={() => { setEditingId(exercise.id); setForm(toForm(exercise)); setMessage('') }} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer' }}>EDIT</button>{exercise.is_active && <button type="button" onClick={() => { void deactivate(exercise) }} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer', color: '#ffb6b6' }}>OFF</button>}</div></div>)}</div>
+        <div style={{ maxHeight: 620, overflowY: 'auto' }}>
+          {loading ? <div style={{ padding: 20, color: 'var(--silver2)' }}>Loading library...</div> : filtered.map((exercise) => (
+            <div key={exercise.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(190px,1fr) 110px 100px 110px auto', gap: 10, padding: '13px 14px', borderBottom: '1px solid rgba(255,255,255,0.06)', alignItems: 'center', opacity: exercise.is_active ? 1 : 0.5 }}>
+              <div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input aria-label={`${exercise.name} exercise name`} value={nameDrafts[exercise.id] ?? exercise.name} onChange={(event) => setNameDrafts((current) => ({ ...current, [exercise.id]: event.target.value }))} style={{ ...fieldStyle, padding: '7px 9px' }} />
+                  <button type="button" onClick={() => { void rename(exercise) }} disabled={renamingId === exercise.id || (nameDrafts[exercise.id] ?? exercise.name).trim() === exercise.name} style={{ ...fieldStyle, width: 'auto', padding: '7px 8px', cursor: 'pointer', color: 'var(--cyan)' }}>{renamingId === exercise.id ? '...' : 'SAVE'}</button>
+                </div>
+                <div style={{ color: 'var(--silver3)', fontFamily: "'DM Mono',monospace", fontSize: 10, marginTop: 4 }}>{exercise.reps ? `${exercise.sets} x ${exercise.reps} reps` : `${exercise.sets} x ${exercise.hold_seconds}s`}</div>
+              </div>
+              <div style={{ color: 'var(--cyan)', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.area}</div>
+              <div style={{ color: 'var(--silver2)', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.phase.replace('_', ' ')}</div>
+              <div style={{ color: exercise.is_active ? 'var(--cyan)' : '#ffb6b6', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.is_active ? 'ACTIVE' : 'INACTIVE'}</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button type="button" onClick={() => { setEditingId(exercise.id); setForm(toForm(exercise)); setMessage('') }} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer' }}>EDIT</button>
+                <button type="button" onClick={() => { void setActiveStatus(exercise, !exercise.is_active) }} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer', color: exercise.is_active ? '#ffb6b6' : 'var(--cyan)' }}>{exercise.is_active ? 'OFF' : 'ON'}</button>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   </section>
