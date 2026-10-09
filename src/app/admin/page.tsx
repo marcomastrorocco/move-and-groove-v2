@@ -10,6 +10,7 @@ import { EXERCISE_VIDEO_LIBRARY, getExerciseVideo } from '@/lib/exercise-videos'
 import { isDemoSessionActive } from '@/lib/demo-session'
 import { EDITABLE_CONFIG_FIELDS, type AppConfigValues, type EditableConfigKey } from '@/lib/app-config'
 import { createClient } from '@/lib/supabase/client'
+import { adminFetch } from '@/lib/admin-fetch'
 
 type AdminOverview = {
   users: {
@@ -293,7 +294,6 @@ export default function AdminPage() {
   const [signedInAs, setSignedInAs] = useState('')
   const [sessionNonce, setSessionNonce] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [accessToken, setAccessToken] = useState('')
   const [overview, setOverview] = useState<AdminOverview | null>(null)
   const [overrides, setOverrides] = useState<Record<string, ExerciseVideoOverride>>({})
   const [managedExercises, setManagedExercises] = useState<ManagedExercise[]>([])
@@ -395,25 +395,13 @@ export default function AdminPage() {
 
       setGate('open')
       setSignedInAs(session.user.email || 'unknown account')
-      setAccessToken(session.access_token)
-
       try {
         const [overviewResponse, mappingsResponse, youtubeSyncResponse, configResponse, exercisesResponse] = await Promise.all([
-          fetch('/api/admin/overview', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }),
-          fetch('/api/admin/exercise-videos', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }),
-          fetch('/api/admin/youtube-sync', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }),
-          fetch('/api/admin/config', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }),
-          fetch('/api/admin/exercises', {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-          }),
+          adminFetch('/api/admin/overview'),
+          adminFetch('/api/admin/exercise-videos'),
+          adminFetch('/api/admin/youtube-sync'),
+          adminFetch('/api/admin/config'),
+          adminFetch('/api/admin/exercises'),
         ])
 
         const overviewPayload = await overviewResponse.json()
@@ -518,17 +506,14 @@ export default function AdminPage() {
       return
     }
 
-    if (!accessToken) return
-
     setSaveStatus((current) => ({ ...current, [exerciseName]: 'saving' }))
     setError('')
 
     try {
-      const response = await fetch('/api/admin/exercise-videos', {
+      const response = await adminFetch('/api/admin/exercise-videos', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           exerciseName,
@@ -558,7 +543,7 @@ export default function AdminPage() {
   async function saveExerciseName(exercise: ExerciseAdminRow) {
     const key = exercise.id || exercise.groupKey + ':' + exercise.name
     const nextName = (draftExerciseNames[key] ?? exercise.name).trim()
-    if (!nextName || nextName === exercise.name || !accessToken) return
+    if (!nextName || nextName === exercise.name) return
 
     setNameSaveStatus((current) => ({ ...current, [key]: 'saving' }))
     setNameSaveErrors((current) => ({ ...current, [key]: '' }))
@@ -567,14 +552,14 @@ export default function AdminPage() {
       let id = exercise.id
       let library = managedExercises
       if (!id) {
-        const imported = await fetch('/api/admin/exercises', {
+        const imported = await adminFetch('/api/admin/exercises', {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ seed: true }),
         })
         const importResult = await imported.json()
         if (!imported.ok) throw new Error(importResult.error || 'Could not prepare the exercise library for editing.')
-        const loaded = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
+        const loaded = await adminFetch('/api/admin/exercises')
         const result = await loaded.json()
         if (!loaded.ok) throw new Error(result.error || 'Could not load exercises.')
         library = result.exercises || []
@@ -582,9 +567,9 @@ export default function AdminPage() {
         id = library.find((item) => item.name === exercise.name && item.area === exercise.area && item.phase === phase)?.id
         if (!id) throw new Error('Exercise was not found in the library. Please refresh and try again.')
       }
-      const response = await fetch(`/api/admin/exercises/${id}`, {
+      const response = await adminFetch(`/api/admin/exercises/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: nextName }),
       })
       const payload = await response.json()
@@ -634,7 +619,7 @@ export default function AdminPage() {
       return
     }
 
-    if (!accessToken || bulkSaving) return
+    if (bulkSaving) return
 
     setBulkSaving(true)
     setBulkSummary(null)
@@ -652,11 +637,10 @@ export default function AdminPage() {
         return
       }
 
-      const response = await fetch('/api/admin/exercise-videos', {
+      const response = await adminFetch('/api/admin/exercise-videos', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           mappings: parsed.mappings,
@@ -698,18 +682,15 @@ export default function AdminPage() {
   }
 
   async function syncFromYoutube() {
-    if (!accessToken || youtubeSyncLoading) return
+    if (youtubeSyncLoading) return
 
     setYoutubeSyncLoading(true)
     setYoutubeSyncResult(null)
     setError('')
 
     try {
-      const response = await fetch('/api/admin/youtube-sync', {
+      const response = await adminFetch('/api/admin/youtube-sync', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
       })
 
       const payload = await response.json()
@@ -774,17 +755,14 @@ export default function AdminPage() {
       return
     }
 
-    if (!accessToken) return
-
     markConfigStatus(key, 'saving')
     setError('')
 
     try {
-      const response = await fetch('/api/admin/config', {
+      const response = await adminFetch('/api/admin/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
           key,
@@ -897,7 +875,7 @@ export default function AdminPage() {
             </div>
           </section>
 
-          {accessToken && <ExerciseLibraryManager accessToken={accessToken} onLibraryChange={setManagedExercises} />}
+          <ExerciseLibraryManager onLibraryChange={setManagedExercises} />
 
           <section style={{ marginBottom: 36 }}>
             <div style={{ fontFamily: "'Syncopate',sans-serif", fontSize: 18, letterSpacing: 3, color: 'var(--white)', marginBottom: 16 }}>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { adminFetch } from '@/lib/admin-fetch'
 
 type Exercise = {
   id: string
@@ -31,7 +32,7 @@ function toForm(exercise: Exercise): FormValues {
   return { name: exercise.name, area: exercise.area, phase: exercise.phase, sets: String(exercise.sets), reps: exercise.reps?.toString() || '', holdSeconds: exercise.hold_seconds?.toString() || '', movementPattern: exercise.movement_pattern || '', anatomicalQuadrants: exercise.anatomical_quadrants.join(', '), rationale: exercise.rationale, studyCitation: exercise.study_citation, aliases: exercise.aliases.join(', '), youtubeId: exercise.youtube_id || '', isActive: exercise.is_active }
 }
 
-export default function ExerciseLibraryManager({ accessToken, onLibraryChange }: { accessToken: string; onLibraryChange?: (exercises: Exercise[]) => void }) {
+export default function ExerciseLibraryManager({ onLibraryChange }: { onLibraryChange?: (exercises: Exercise[]) => void }) {
   const [exercises, setExercises] = useState<Exercise[]>([])
   const [form, setForm] = useState<FormValues>(emptyForm)
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -45,7 +46,7 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
   async function load() {
     setLoading(true)
     try {
-      const response = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
+      const response = await adminFetch('/api/admin/exercises')
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || 'Could not load the exercise library.')
       setExercises(payload.exercises || [])
@@ -60,9 +61,9 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
   useEffect(() => {
     const timer = window.setTimeout(() => { void load() }, 0)
     return () => window.clearTimeout(timer)
-    // Loading is intentionally restarted only when the authenticated token changes.
+    // Loading is intentionally restarted only when the authenticated session changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken])
+  }, [])
 
   function update<K extends keyof FormValues>(key: K, value: FormValues[K]) {
     setForm((current) => ({ ...current, [key]: value }))
@@ -79,8 +80,8 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
 
   async function save() {
     setSaving(true); setMessage('')
-    const response = await fetch(editingId ? `/api/admin/exercises/${editingId}` : '/api/admin/exercises', {
-      method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` }, body: JSON.stringify(payload()),
+    const response = await adminFetch(editingId ? `/api/admin/exercises/${editingId}` : '/api/admin/exercises', {
+      method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
     })
     const result = await response.json()
     setSaving(false)
@@ -92,9 +93,9 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
   async function setActiveStatus(exercise: Exercise, isActive: boolean) {
     const action = isActive ? 'Reactivate' : 'Deactivate'
     if (!window.confirm(`${action} ${exercise.name}? Existing saved routines remain unchanged.`)) return
-    const response = await fetch(`/api/admin/exercises/${exercise.id}`, {
+    const response = await adminFetch(`/api/admin/exercises/${exercise.id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ isActive }),
     })
     const result = await response.json()
@@ -109,9 +110,9 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
 
     setRenamingId(exercise.id); setMessage('')
     try {
-      const response = await fetch(`/api/admin/exercises/${exercise.id}`, {
+      const response = await adminFetch(`/api/admin/exercises/${exercise.id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       })
       const result = await response.json()
@@ -130,7 +131,7 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
   async function seed() {
     if (!window.confirm('Import the existing curated and foam-roll libraries into Supabase now? This can be safely run once.')) return
     setSaving(true); setMessage('')
-    const response = await fetch('/api/admin/exercises', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ seed: true }) })
+    const response = await adminFetch('/api/admin/exercises', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seed: true }) })
     const result = await response.json(); setSaving(false)
     if (!response.ok) { setMessage(result.error || 'Could not seed the library.'); return }
     setMessage(`${result.seeded} existing exercises imported into Supabase.`); await load()
