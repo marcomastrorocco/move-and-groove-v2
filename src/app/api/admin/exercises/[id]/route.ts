@@ -94,6 +94,29 @@ export async function DELETE(req: NextRequest, { params }: Context) {
   try {
     const { serviceClient } = await requireAdminAccess(req)
     const { id } = await params
+    const { data: current, error: currentError } = await serviceClient
+      .from('exercises')
+      .select('area, phase, is_active')
+      .eq('id', id)
+      .single()
+    if (currentError) throw new Error(currentError.message)
+
+    if (current.is_active) {
+      const { count, error: countError } = await serviceClient
+        .from('exercises')
+        .select('id', { count: 'exact', head: true })
+        .eq('area', current.area)
+        .eq('phase', current.phase)
+        .eq('is_active', true)
+      if (countError) throw new Error(countError.message)
+      if ((count || 0) <= 1) {
+        return NextResponse.json(
+          { error: `At least one exercise must stay active in ${current.area} / ${current.phase}.` },
+          { status: 409 },
+        )
+      }
+    }
+
     const { data, error } = await serviceClient.from('exercises').update({ is_active: false }).eq('id', id).select('id, is_active').single()
     if (error) throw new Error(error.message)
     invalidateExerciseLibraryCache()

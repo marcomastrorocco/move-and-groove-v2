@@ -3,6 +3,9 @@ import { getStaticExerciseSeed, invalidateExerciseLibraryCache, type ExerciseAre
 import { requireAdminAccess } from '@/lib/supabase/admin'
 import { getExerciseVideo } from '@/lib/exercise-videos'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 type ExercisePayload = {
   name?: unknown
   area?: unknown
@@ -95,7 +98,13 @@ export async function GET(req: NextRequest) {
       .order('phase')
       .order('name')
     if (error) throw new Error(error.message)
-    return NextResponse.json({ exercises: data || [] })
+    return NextResponse.json(
+      {
+        exercises: data || [],
+        generatorLibrarySource: data && data.length > 0 ? 'supabase' : 'fallback',
+      },
+      { headers: { 'Cache-Control': 'no-store, max-age=0' } },
+    )
   } catch (error) {
     return responseError(error)
   }

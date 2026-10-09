@@ -41,16 +41,19 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
+  const [generatorLibrarySource, setGeneratorLibrarySource] = useState<'supabase' | 'fallback'>('supabase')
 
   async function load() {
     setLoading(true)
     try {
-      const response = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
+      const response = await fetch('/api/admin/exercises', { cache: 'no-store', headers: { Authorization: `Bearer ${accessToken}` } })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || 'Could not load the exercise library.')
       setExercises(payload.exercises || [])
+      setGeneratorLibrarySource(payload.generatorLibrarySource === 'fallback' ? 'fallback' : 'supabase')
       onLibraryChange?.(payload.exercises || [])
     } catch (error) {
+      setGeneratorLibrarySource('fallback')
       setMessage(error instanceof Error ? error.message : 'Could not load the exercise library.')
     } finally {
       setLoading(false)
@@ -138,6 +141,7 @@ export default function ExerciseLibraryManager({ accessToken, onLibraryChange }:
       <button type="button" onClick={() => { void seed() }} disabled={saving} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer', color: 'var(--cyan)' }}>IMPORT CURRENT LIBRARY</button>
     </div>
     {message && <div style={{ marginBottom: 14, padding: '11px 13px', border: '1px solid rgba(0,180,216,0.25)', color: 'var(--silver2)', fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>{message}</div>}
+    {generatorLibrarySource === 'fallback' && <div role="alert" style={{ marginBottom: 14, padding: '11px 13px', border: '1px solid rgba(255,159,159,0.45)', background: 'rgba(255,159,159,0.07)', color: '#ffb6b6', fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>Warning: the generator is currently using the hardcoded fallback exercise library because no active Supabase exercises are available.</div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 0.8fr) minmax(0, 1.2fr)', gap: 16 }}>
       <div style={{ padding: 18, border: '1px solid rgba(0,180,216,0.18)', background: 'rgba(8,10,14,0.96)' }}>
         <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 2, color: 'var(--cyan)', marginBottom: 14 }}>{editingId ? 'EDIT EXERCISE' : 'ADD EXERCISE'}</div>

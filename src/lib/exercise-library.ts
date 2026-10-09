@@ -148,12 +148,6 @@ export async function getActiveExerciseLibrary(client: SupabaseClient): Promise<
     }
   }
 
-  const hasCompleteRoutineLibrary = (Object.values(routine) as Array<Record<CuratedPillar, RoutineExerciseTemplate[]>>)
-    .every((area) => area.release.length > 0 && area.activation.length > 0 && area.range.length > 0)
-  if (!hasCompleteRoutineLibrary) {
-    return copyFallbackLibrary()
-  }
-
   const library: ExerciseLibrary = { routine, foamRoll, source: 'supabase' }
   cachedLibrary = { library, expiresAt: Date.now() + 5 * 60 * 1000 }
   return library

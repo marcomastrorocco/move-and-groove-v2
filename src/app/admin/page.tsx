@@ -412,6 +412,7 @@ export default function AdminPage() {
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
           fetch('/api/admin/exercises', {
+            cache: 'no-store',
             headers: { Authorization: `Bearer ${session.access_token}` },
           }),
         ])
@@ -574,7 +575,7 @@ export default function AdminPage() {
         })
         const importResult = await imported.json()
         if (!imported.ok) throw new Error(importResult.error || 'Could not prepare the exercise library for editing.')
-        const loaded = await fetch('/api/admin/exercises', { headers: { Authorization: `Bearer ${accessToken}` } })
+        const loaded = await fetch('/api/admin/exercises', { cache: 'no-store', headers: { Authorization: `Bearer ${accessToken}` } })
         const result = await loaded.json()
         if (!loaded.ok) throw new Error(result.error || 'Could not load exercises.')
         library = result.exercises || []
