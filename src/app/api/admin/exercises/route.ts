@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getStaticExerciseSeed, invalidateExerciseLibraryCache, type ExerciseArea, type ExercisePhase } from '@/lib/exercise-library'
+import { getStaticExerciseSeed, type ExerciseArea, type ExercisePhase } from '@/lib/exercise-library'
 import { requireAdminAccess } from '@/lib/supabase/admin'
 import { getExerciseVideo } from '@/lib/exercise-videos'
+
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
 type ExercisePayload = {
   name?: unknown
@@ -95,7 +98,13 @@ export async function GET(req: NextRequest) {
       .order('phase')
       .order('name')
     if (error) throw new Error(error.message)
-    return NextResponse.json({ exercises: data || [] })
+    return NextResponse.json(
+      {
+        exercises: data || [],
+        generatorLibrarySource: data?.some((exercise) => exercise.is_active) ? 'supabase' : 'fallback',
+      },
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    )
   } catch (error) {
     return responseError(error)
   }
@@ -122,7 +131,6 @@ export async function POST(req: NextRequest) {
       .select('id, name, area, phase, sets, reps, hold_seconds, movement_pattern, anatomical_quadrants, rationale, study_citation, aliases, youtube_id, is_active, created_at, updated_at')
       .single()
     if (error) throw new Error(error.message)
-    invalidateExerciseLibraryCache()
     return NextResponse.json({ exercise: data }, { status: 201 })
   } catch (error) {
     return responseError(error)
@@ -153,7 +161,6 @@ export async function PUT(req: NextRequest) {
     const rows = seed.map((exercise) => ({ ...exercise, youtube_id: videoByName.get(exercise.name.toLowerCase()) || getExerciseVideo(exercise.name)?.youtubeVideoId || null }))
     const { data, error } = await serviceClient.from('exercises').upsert(rows, { onConflict: 'name,area,phase', ignoreDuplicates: true }).select('id')
     if (error) throw new Error(error.message)
-    invalidateExerciseLibraryCache()
     return NextResponse.json({ seeded: data?.length || 0 })
   } catch (error) {
     return responseError(error)

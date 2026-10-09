@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { invalidateExerciseLibraryCache } from '@/lib/exercise-library'
-import { requireAdminAccess } from '@/lib/supabase/admin'
+import { createServiceRoleClient, requireAdminAccess } from '@/lib/supabase/admin'
 
 type Context = { params: Promise<{ id: string }> }
 
@@ -32,14 +31,54 @@ function validate(body: Record<string, unknown>) {
   return { name, area, phase, sets, reps, hold_seconds: hold, movement_pattern: movement || null, anatomical_quadrants: array(body.anatomicalQuadrants), rationale: text(body.rationale), study_citation: text(body.studyCitation), aliases: array(body.aliases), youtube_id: videoId(youtube), is_active: typeof body.isActive === 'boolean' ? body.isActive : true }
 }
 
+async function guardLastActiveSlot(
+  serviceClient: ReturnType<typeof createServiceRoleClient>,
+  id: string,
+  next: { area?: string; phase?: string; isActive?: boolean },
+) {
+  const { data: current, error: currentError } = await serviceClient
+    .from('exercises')
+    .select('area, phase, is_active')
+    .eq('id', id)
+    .single()
+  if (currentError) throw new Error(currentError.message)
+
+  const leavesSlot = current.is_active && (
+    next.isActive === false ||
+    (next.area !== undefined && next.area !== current.area) ||
+    (next.phase !== undefined && next.phase !== current.phase)
+  )
+  if (!leavesSlot) return null
+
+  const { count, error: countError } = await serviceClient
+    .from('exercises')
+    .select('id', { count: 'exact', head: true })
+    .eq('area', current.area)
+    .eq('phase', current.phase)
+    .eq('is_active', true)
+    .neq('id', id)
+  if (countError) throw new Error(countError.message)
+  if ((count || 0) > 0) return null
+
+  return NextResponse.json(
+    { error: `At least one exercise must stay active in ${current.area} / ${current.phase}.` },
+    { status: 409 },
+  )
+}
+
 export async function PUT(req: NextRequest, { params }: Context) {
   try {
     const { serviceClient } = await requireAdminAccess(req)
     const { id } = await params
     const payload = validate(await req.json() as Record<string, unknown>)
+    const guardResponse = await guardLastActiveSlot(serviceClient, id, {
+      area: payload.area,
+      phase: payload.phase,
+      isActive: payload.is_active,
+    })
+    if (guardResponse) return guardResponse
     const { data, error } = await serviceClient.from('exercises').update(payload).eq('id', id).select().single()
     if (error) throw new Error(error.message)
-    invalidateExerciseLibraryCache()
     return NextResponse.json({ exercise: data })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not update exercise.'
@@ -104,6 +143,11 @@ export async function PATCH(req: NextRequest, { params }: Context) {
       updates.is_active = patch.isActive
     }
 
+    if (updates.is_active === false) {
+      const guardResponse = await guardLastActiveSlot(serviceClient, id, { isActive: false })
+      if (guardResponse) return guardResponse
+    }
+
     const { data, error } = await serviceClient
       .from('exercises')
       .update(updates)
@@ -111,7 +155,6 @@ export async function PATCH(req: NextRequest, { params }: Context) {
       .select('id, name, is_active')
       .single()
     if (error) throw new Error(error.message)
-    invalidateExerciseLibraryCache()
     return NextResponse.json({ exercise: data })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not update exercise.'
@@ -123,9 +166,10 @@ export async function DELETE(req: NextRequest, { params }: Context) {
   try {
     const { serviceClient } = await requireAdminAccess(req)
     const { id } = await params
+    const guardResponse = await guardLastActiveSlot(serviceClient, id, { isActive: false })
+    if (guardResponse) return guardResponse
     const { data, error } = await serviceClient.from('exercises').update({ is_active: false }).eq('id', id).select('id, is_active').single()
     if (error) throw new Error(error.message)
-    invalidateExerciseLibraryCache()
     return NextResponse.json({ exercise: data })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Could not deactivate exercise.'

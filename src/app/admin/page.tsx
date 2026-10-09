@@ -401,7 +401,7 @@ export default function AdminPage() {
           adminFetch('/api/admin/exercise-videos'),
           adminFetch('/api/admin/youtube-sync'),
           adminFetch('/api/admin/config'),
-          adminFetch('/api/admin/exercises'),
+          adminFetch('/api/admin/exercises', { cache: 'no-store' }),
         ])
 
         const overviewPayload = await overviewResponse.json()
@@ -559,7 +559,7 @@ export default function AdminPage() {
         })
         const importResult = await imported.json()
         if (!imported.ok) throw new Error(importResult.error || 'Could not prepare the exercise library for editing.')
-        const loaded = await adminFetch('/api/admin/exercises')
+        const loaded = await adminFetch('/api/admin/exercises', { cache: 'no-store' })
         const result = await loaded.json()
         if (!loaded.ok) throw new Error(result.error || 'Could not load exercises.')
         library = result.exercises || []

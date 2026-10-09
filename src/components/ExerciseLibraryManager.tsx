@@ -39,19 +39,23 @@ export default function ExerciseLibraryManager({ onLibraryChange }: { onLibraryC
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [statusChangingId, setStatusChangingId] = useState<string | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({})
   const [message, setMessage] = useState('')
+  const [generatorLibrarySource, setGeneratorLibrarySource] = useState<'supabase' | 'fallback' | 'unknown'>('unknown')
 
   async function load() {
     setLoading(true)
     try {
-      const response = await adminFetch('/api/admin/exercises')
+      const response = await adminFetch('/api/admin/exercises', { cache: 'no-store' })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error || 'Could not load the exercise library.')
       setExercises(payload.exercises || [])
+      setGeneratorLibrarySource(payload.generatorLibrarySource === 'fallback' ? 'fallback' : 'supabase')
       onLibraryChange?.(payload.exercises || [])
     } catch (error) {
+      setGeneratorLibrarySource('unknown')
       setMessage(error instanceof Error ? error.message : 'Could not load the exercise library.')
     } finally {
       setLoading(false)
@@ -79,29 +83,44 @@ export default function ExerciseLibraryManager({ onLibraryChange }: { onLibraryC
   }
 
   async function save() {
+    if (saving || statusChangingId) return
     setSaving(true); setMessage('')
-    const response = await adminFetch(editingId ? `/api/admin/exercises/${editingId}` : '/api/admin/exercises', {
-      method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
-    })
-    const result = await response.json()
-    setSaving(false)
-    if (!response.ok) { setMessage(result.error || 'Could not save exercise.'); return }
-    setMessage(editingId ? 'Exercise updated.' : 'Exercise added.')
-    setEditingId(null); setForm(emptyForm()); await load()
+    try {
+      const response = await adminFetch(editingId ? `/api/admin/exercises/${editingId}` : '/api/admin/exercises', {
+        method: editingId ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload()),
+      })
+      const result = await response.json()
+      if (!response.ok) { setMessage(result.error || 'Could not save exercise.'); return }
+      setMessage(editingId ? 'Exercise updated.' : 'Exercise added.')
+      setEditingId(null); setForm(emptyForm()); await load()
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not save exercise.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function setActiveStatus(exercise: Exercise, isActive: boolean) {
+    if (saving || statusChangingId) return
     const action = isActive ? 'Reactivate' : 'Deactivate'
     if (!window.confirm(`${action} ${exercise.name}? Existing saved routines remain unchanged.`)) return
-    const response = await adminFetch(`/api/admin/exercises/${exercise.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ isActive }),
-    })
-    const result = await response.json()
-    if (!response.ok) { setMessage(result.error || 'Could not update exercise status.'); return }
-    setExercises((current) => current.map((item) => item.id === exercise.id ? { ...item, is_active: result.exercise.is_active } : item))
-    setMessage(`${exercise.name} ${isActive ? 'reactivated' : 'deactivated'}.`)
+    setStatusChangingId(exercise.id); setMessage('')
+    try {
+      const response = await adminFetch(`/api/admin/exercises/${exercise.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive }),
+      })
+      const result = await response.json()
+      if (!response.ok) { setMessage(result.error || 'Could not update exercise status.'); return }
+      setExercises((current) => current.map((item) => item.id === exercise.id ? { ...item, is_active: result.exercise.is_active } : item))
+      if (result.exercise.is_active) setGeneratorLibrarySource('supabase')
+      setMessage(`${exercise.name} ${isActive ? 'reactivated' : 'deactivated'}.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not update exercise status.')
+    } finally {
+      setStatusChangingId(null)
+    }
   }
 
   async function rename(exercise: Exercise) {
@@ -145,6 +164,7 @@ export default function ExerciseLibraryManager({ onLibraryChange }: { onLibraryC
       <button type="button" onClick={() => { void seed() }} disabled={saving} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer', color: 'var(--cyan)' }}>IMPORT CURRENT LIBRARY</button>
     </div>
     {message && <div style={{ marginBottom: 14, padding: '11px 13px', border: '1px solid rgba(0,180,216,0.25)', color: 'var(--silver2)', fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>{message}</div>}
+    {!loading && generatorLibrarySource !== 'supabase' && <div role="alert" style={{ marginBottom: 14, padding: '11px 13px', border: '1px solid rgba(255,159,159,0.45)', background: 'rgba(255,159,159,0.07)', color: '#ffb6b6', fontFamily: "'DM Sans',sans-serif", fontSize: 13 }}>{generatorLibrarySource === 'fallback' ? 'Warning: the generator is using the hardcoded fallback exercise library because no active Supabase exercises are available.' : 'Warning: the generator exercise source could not be verified. Check the exercise library connection.'}</div>}
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 0.8fr) minmax(0, 1.2fr)', gap: 16 }}>
       <div style={{ padding: 18, border: '1px solid rgba(0,180,216,0.18)', background: 'rgba(8,10,14,0.96)' }}>
         <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 2, color: 'var(--cyan)', marginBottom: 14 }}>{editingId ? 'EDIT EXERCISE' : 'ADD EXERCISE'}</div>
@@ -159,7 +179,7 @@ export default function ExerciseLibraryManager({ onLibraryChange }: { onLibraryC
           <input style={fieldStyle} value={form.aliases} onChange={(event) => update('aliases', event.target.value)} placeholder="Aliases, comma separated" />
           <input style={fieldStyle} value={form.youtubeId} onChange={(event) => update('youtubeId', event.target.value)} placeholder="YouTube URL or ID" />
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--silver2)', fontFamily: "'DM Sans',sans-serif", fontSize: 13, cursor: 'pointer' }}><input type="checkbox" checked={form.isActive} onChange={(event) => update('isActive', event.target.checked)} /> Active</label>
-          <div style={{ display: 'flex', gap: 10 }}><button type="button" onClick={() => { void save() }} disabled={saving} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer', color: 'var(--cyan)' }}>{saving ? 'SAVING' : editingId ? 'SAVE CHANGES' : 'ADD EXERCISE'}</button>{editingId && <button type="button" onClick={() => { setEditingId(null); setForm(emptyForm()) }} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer' }}>CANCEL</button>}</div>
+          <div style={{ display: 'flex', gap: 10 }}><button type="button" onClick={() => { void save() }} disabled={saving || statusChangingId !== null} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer', color: 'var(--cyan)' }}>{saving ? 'SAVING' : editingId ? 'SAVE CHANGES' : 'ADD EXERCISE'}</button>{editingId && <button type="button" onClick={() => { setEditingId(null); setForm(emptyForm()) }} style={{ ...fieldStyle, width: 'auto', cursor: 'pointer' }}>CANCEL</button>}</div>
         </div>
       </div>
       <div style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(8,10,14,0.96)' }}>
@@ -179,7 +199,7 @@ export default function ExerciseLibraryManager({ onLibraryChange }: { onLibraryC
               <div style={{ color: exercise.is_active ? 'var(--cyan)' : '#ffb6b6', fontFamily: "'DM Mono',monospace", fontSize: 10 }}>{exercise.is_active ? 'ACTIVE' : 'INACTIVE'}</div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button type="button" onClick={() => { setEditingId(exercise.id); setForm(toForm(exercise)); setMessage('') }} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer' }}>EDIT</button>
-                <button type="button" onClick={() => { void setActiveStatus(exercise, !exercise.is_active) }} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer', color: exercise.is_active ? '#ffb6b6' : 'var(--cyan)' }}>{exercise.is_active ? 'OFF' : 'ON'}</button>
+                <button type="button" onClick={() => { void setActiveStatus(exercise, !exercise.is_active) }} disabled={saving || statusChangingId !== null} style={{ ...fieldStyle, width: 'auto', padding: '8px', cursor: 'pointer', color: exercise.is_active ? '#ffb6b6' : 'var(--cyan)' }}>{statusChangingId === exercise.id ? '...' : exercise.is_active ? 'OFF' : 'ON'}</button>
               </div>
             </div>
           ))}

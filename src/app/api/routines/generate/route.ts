@@ -5,7 +5,8 @@ import { readBasicDailyRoutineLimit } from '@/lib/app-config'
 import { CURATED_ROUTINE_LIBRARY } from '@/lib/curated-mobility'
 import {
   buildApprovedExercisePoolTextFromLibrary,
-  getActiveExerciseLibrary,
+  ExerciseLibraryUnavailableError,
+  getActiveExerciseLibraryForGeneration,
   type ExerciseLibrary,
 } from '@/lib/exercise-library'
 import {
@@ -305,6 +306,19 @@ function finalizeGeneratedRoutine({
     targetAreas,
     exerciseLibrary,
   )
+
+  const containsUnapprovedExercise = routine.phases.some((phase) => {
+    const pillar = phase.pillar
+    if (pillar === 'prep') return true
+    return phase.exercises.some((exercise) => {
+      if (!(exercise.targetArea in exerciseLibrary.routine)) return true
+      const area = exercise.targetArea as keyof typeof exerciseLibrary.routine
+      return !exerciseLibrary.routine[area][pillar].some((approved) => approved.name === exercise.name)
+    })
+  })
+  if (containsUnapprovedExercise) {
+    throw new Error('AI routine included an exercise outside the active library')
+  }
 
   if (prepPhase) {
     routine.phases.unshift(prepPhase)
@@ -829,18 +843,17 @@ function normalizeExerciseName(value: string) {
 }
 
 function getApprovedExerciseCanonicalMap(targetAreas: string[], exerciseLibrary: ExerciseLibrary) {
-  const allExercises = targetAreas
-    .filter((area): area is keyof typeof exerciseLibrary.routine => area in exerciseLibrary.routine)
-    .flatMap((area) => {
-      const phases = exerciseLibrary.routine[area]
-      return [...phases.release, ...phases.activation, ...phases.range]
-    })
-
   const map = new Map<string, string>()
-  for (const exercise of allExercises) {
-    map.set(normalizeExerciseName(exercise.name), exercise.name)
-    for (const alias of exercise.aliases || []) {
-      map.set(normalizeExerciseName(alias), exercise.name)
+  for (const area of targetAreas) {
+    if (!(area in exerciseLibrary.routine)) continue
+    const phases = exerciseLibrary.routine[area as keyof typeof exerciseLibrary.routine]
+    for (const pillar of ['release', 'activation', 'range'] as const) {
+      for (const exercise of phases[pillar]) {
+        map.set(`${area}:${pillar}:${normalizeExerciseName(exercise.name)}`, exercise.name)
+        for (const alias of exercise.aliases || []) {
+          map.set(`${area}:${pillar}:${normalizeExerciseName(alias)}`, exercise.name)
+        }
+      }
     }
   }
   return map
@@ -854,7 +867,7 @@ function normalizeRoutineExerciseNames(routine: GeneratedRoutine, targetAreas: s
     phases: routine.phases.map((phase) => ({
       ...phase,
       exercises: phase.exercises.map((exercise) => {
-        const canonicalName = approvedMap.get(normalizeExerciseName(exercise.name))
+        const canonicalName = approvedMap.get(`${exercise.targetArea}:${phase.pillar}:${normalizeExerciseName(exercise.name)}`)
         return canonicalName
           ? { ...exercise, name: canonicalName }
           : exercise
@@ -1169,7 +1182,8 @@ export async function POST(req: NextRequest) {
     })
     const effectiveGoal = readinessModifiers.effectiveGoal
     const sessionDuration = readinessModifiers.adjustedDuration
-    const exerciseLibrary = await getActiveExerciseLibrary(authenticatedSupabase || supabase)
+    // Use the same server-side reader as admin so athlete/anon RLS cannot mimic an empty library.
+    const exerciseLibrary = await getActiveExerciseLibraryForGeneration()
     const approvedExercisePool = buildApprovedExercisePoolTextFromLibrary(targetAreas, exerciseLibrary)
     const sportFocus = sportProfile ? sportProfile.keyDemands.join(', ') : null
     const sportRisks = sportProfile ? sportProfile.mobilityRisks.join('; ') : null
@@ -1447,6 +1461,9 @@ Respond ONLY in valid JSON (no markdown):
 
   } catch (err: unknown) {
     console.error('[generate]', err)
+    if (err instanceof ExerciseLibraryUnavailableError) {
+      return NextResponse.json({ error: err.message }, { status: 503 })
+    }
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })
   }
