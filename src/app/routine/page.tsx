@@ -208,7 +208,13 @@ function estimateRoutineDurationMinutes(routine: Routine | null) {
 
 type ExerciseVideoOverride = {
   exercise_name: string
+  target_area: string
+  pillar: Phase['pillar']
   youtube_id: string | null
+}
+
+function exerciseVideoKey(name: string, area: string, pillar: string) {
+  return JSON.stringify([name, area, pillar])
 }
 
 const PHASE_STYLES: Record<Phase['pillar'], { label: string; color: string; border: string; bg: string }> = {
@@ -363,7 +369,7 @@ export default function RoutinePage() {
   const [showPostSessionModal, setShowPostSessionModal] = useState(false)
   const [hasTodayReadiness, setHasTodayReadiness] = useState(false)
   const [completedSets, setCompletedSets] = useState<Record<number, number>>({})
-  const [videoOverrides, setVideoOverrides] = useState<Record<string, string>>({})
+  const [videoOverrides, setVideoOverrides] = useState<Record<string, string | null>>({})
   const [expandedVideo, setExpandedVideo] = useState<{ title: string; youtubeVideoId: string } | null>(null)
   const [progressSaved, setProgressSaved] = useState(false)
   const [progressSaveError, setProgressSaveError] = useState('')
@@ -548,21 +554,30 @@ export default function RoutinePage() {
         return
       }
 
-      const exerciseNames = [...new Set(
-        routine.phases
-          .flatMap((phase) => phase.exercises)
-          .map((exercise) => exercise.name.trim())
-          .filter(Boolean),
-      )]
+      const exerciseRequests = routine.phases.flatMap((phase) =>
+        phase.exercises.map((exercise) => ({
+          name: exercise.name.trim(),
+          area: exercise.targetArea,
+          pillar: phase.pillar,
+        })),
+      ).filter((item) => item.name)
 
-      if (exerciseNames.length === 0) {
+      if (exerciseRequests.length === 0) {
         setVideoOverrides({})
         return
       }
 
       try {
         const params = new URLSearchParams()
-        exerciseNames.forEach((name) => params.append('name', name))
+        const requested = new Set<string>()
+        for (const exercise of exerciseRequests) {
+          const key = exerciseVideoKey(exercise.name, exercise.area, exercise.pillar)
+          if (requested.has(key)) continue
+          requested.add(key)
+          params.append('name', exercise.name)
+          params.append('area', exercise.area)
+          params.append('pillar', exercise.pillar)
+        }
         const { data: { session } } = await supabase.auth.getSession()
         const accessToken = session?.access_token
 
@@ -571,6 +586,7 @@ export default function RoutinePage() {
         }
 
         const response = await fetch(`/api/exercise-videos?${params.toString()}`, {
+          cache: 'no-store',
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -583,8 +599,10 @@ export default function RoutinePage() {
 
         const nextOverrides = Object.fromEntries(
           (payload.mappings as ExerciseVideoOverride[])
-            .filter((mapping) => mapping.youtube_id)
-            .map((mapping) => [mapping.exercise_name, mapping.youtube_id as string]),
+            .map((mapping) => [
+              exerciseVideoKey(mapping.exercise_name, mapping.target_area, mapping.pillar),
+              mapping.youtube_id,
+            ]),
         )
         setVideoOverrides(nextOverrides)
       } catch (error) {
@@ -920,15 +938,17 @@ export default function RoutinePage() {
                   const completedSetCount = Math.min(completedSets[flatIndex] || 0, exercise.sets)
                   const isDone = completedSetCount >= exercise.sets
                   const isLocked = phaseIndex > activePhaseIndex && !sessionFinished
-                  const overrideVideoId = videoOverrides[exercise.name] || null
-                  const mappedVideo = overrideVideoId
-                    ? {
+                  const videoKey = exerciseVideoKey(exercise.name, exercise.targetArea, phase.pillar)
+                  const hasCatalogMapping = Object.prototype.hasOwnProperty.call(videoOverrides, videoKey)
+                  const overrideVideoId = videoOverrides[videoKey]
+                  const mappedVideo = hasCatalogMapping
+                    ? (overrideVideoId ? {
                         slug: `override-${exercise.name}`,
                         title: exercise.name,
                         youtubeVideoId: overrideVideoId,
                         aliases: [],
                         area: exercise.targetArea,
-                      }
+                      } : null)
                     : getExerciseVideo(exercise.name)
 
                   return (
