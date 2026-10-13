@@ -8,6 +8,7 @@ import PreSessionReadinessModal from '@/components/PreSessionReadinessModal'
 import { getExerciseVideo, getExerciseVideoEmbedUrl, getExerciseVideoWatchUrl } from '@/lib/exercise-videos'
 import type { ReadinessAdjustmentSnapshot } from '@/lib/readiness'
 import { pickRoutineBackground } from '@/lib/routine-backgrounds'
+import { calculatePhaseBudgets, estimatePrescriptionSeconds } from '@/lib/prescription-scaler'
 import { MAX_SAVED_WORKOUTS, isWorkoutSaved, saveWorkoutToLibrary } from '@/lib/saved-workouts'
 import { createClient } from '@/lib/supabase/client'
 import { hasPreSessionCheckinToday } from '@/lib/session-flow'
@@ -38,6 +39,8 @@ type Routine = {
   phases: Phase[]
   evidenceSummary: string
   savedId?: number
+  plannedDurationMinutes?: number
+  prescriptionGoal?: string
 }
 
 type RoutineMeta = {
@@ -53,66 +56,13 @@ type RoutineMeta = {
   progressLoggedAt?: string | null
 }
 
-function shouldUseLighterRangeSetScheme(meta: RoutineMeta | null) {
-  return meta?.source === 'recovery'
-    || meta?.goal === 'flexibility'
-    || meta?.goal === 'performance'
-    || meta?.readiness?.modificationMode === 'recovery'
-}
-
-function normalizeExerciseForDisplay(
-  exercise: Exercise,
-  pillar: Phase['pillar'],
-  index: number,
-  phaseLength: number,
-  meta: RoutineMeta | null,
-): Exercise {
+function normalizeExerciseForDisplay(exercise: Exercise): Exercise {
   const shouldTreatTinyHoldAsTempo =
     typeof exercise.reps === 'number'
     && typeof exercise.holdSeconds === 'number'
     && exercise.holdSeconds <= 5
 
   const nextHoldSeconds = shouldTreatTinyHoldAsTempo ? null : exercise.holdSeconds
-
-  if (pillar === 'prep') {
-    return {
-      ...exercise,
-      holdSeconds: nextHoldSeconds,
-    }
-  }
-
-  if (pillar === 'release') {
-    return {
-      ...exercise,
-      sets: 1,
-      holdSeconds: nextHoldSeconds,
-    }
-  }
-
-  if (pillar === 'activation') {
-    return {
-      ...exercise,
-      sets: index < 2 ? 2 : 1,
-      holdSeconds: nextHoldSeconds,
-    }
-  }
-
-  if (pillar === 'range') {
-    if (!shouldUseLighterRangeSetScheme(meta)) {
-      return {
-        ...exercise,
-        sets: 2,
-        holdSeconds: nextHoldSeconds,
-      }
-    }
-
-    const prioritizeTwoRangeDrills = phaseLength >= 4 ? index < 2 : index === 0
-    return {
-      ...exercise,
-      sets: prioritizeTwoRangeDrills ? 2 : 1,
-      holdSeconds: nextHoldSeconds,
-    }
-  }
 
   return {
     ...exercise,
@@ -160,12 +110,10 @@ function markRoutineCompleted() {
   return completedAt
 }
 
-function normalizeRoutineForDisplay(routine: Routine, meta: RoutineMeta | null): Routine {
+function normalizeRoutineForDisplay(routine: Routine): Routine {
   const phases = routine.phases.map((phase) => ({
     ...phase,
-    exercises: phase.exercises.map((exercise, index) =>
-      normalizeExerciseForDisplay(exercise, phase.pillar, index, phase.exercises.length, meta),
-    ),
+    exercises: phase.exercises.map(normalizeExerciseForDisplay),
   }))
 
   return {
@@ -175,22 +123,8 @@ function normalizeRoutineForDisplay(routine: Routine, meta: RoutineMeta | null):
   }
 }
 
-const RELEASE_REP_SECONDS = 4
-const ACTIVE_REP_SECONDS = 3.5
-const HOLD_REST_SECONDS = 15
-const REP_REST_SECONDS = 12
-const EXERCISE_SETUP_SECONDS = 15
-
 function estimateExerciseDurationSeconds(exercise: Exercise, pillar: Phase['pillar']) {
-  const setCount = Math.max(exercise.sets, 1)
-
-  if (exercise.holdSeconds) {
-    return EXERCISE_SETUP_SECONDS + (setCount * exercise.holdSeconds) + (Math.max(setCount - 1, 0) * HOLD_REST_SECONDS)
-  }
-
-  const repCount = Math.max(exercise.reps || 0, 1)
-  const repSeconds = pillar === 'release' ? RELEASE_REP_SECONDS : ACTIVE_REP_SECONDS
-  return EXERCISE_SETUP_SECONDS + (setCount * repCount * repSeconds) + (Math.max(setCount - 1, 0) * REP_REST_SECONDS)
+  return estimatePrescriptionSeconds(exercise, pillar)
 }
 
 function estimateRoutineDurationMinutes(routine: Routine | null) {
@@ -224,13 +158,12 @@ const PHASE_STYLES: Record<Phase['pillar'], { label: string; color: string; bord
   range: { label: 'RANGE', color: 'var(--cyan)', border: 'rgba(0,180,216,0.35)', bg: 'rgba(0,180,216,0.05)' },
 }
 
-function useTimer(sets: number, holdSeconds: number) {
+function useTimer(sets: number, holdSeconds: number, restSeconds: number) {
   const [active, setActive] = useState(false)
   const [currentSet, setCurrentSet] = useState(1)
   const [secondsLeft, setSecondsLeft] = useState(holdSeconds)
   const [isRest, setIsRest] = useState(false)
   const [done, setDone] = useState(false)
-  const REST = 15
 
   useEffect(() => {
     if (!active || done) return
@@ -241,7 +174,7 @@ function useTimer(sets: number, holdSeconds: number) {
           if (!isRest) {
             if (currentSet < sets) {
               setIsRest(true)
-              return REST
+              return restSeconds
             }
             setDone(true)
             setActive(false)
@@ -258,7 +191,7 @@ function useTimer(sets: number, holdSeconds: number) {
     }, 1000)
 
     return () => window.clearInterval(interval)
-  }, [active, currentSet, done, holdSeconds, isRest, sets])
+  }, [active, currentSet, done, holdSeconds, isRest, restSeconds, sets])
 
   function start() {
     setActive(true)
@@ -279,10 +212,10 @@ function useTimer(sets: number, holdSeconds: number) {
   return { active, currentSet, secondsLeft, isRest, done, start, pause, reset }
 }
 
-function ExerciseTimer({ sets, holdSeconds }: { sets: number; holdSeconds: number }) {
-  const { active, currentSet, secondsLeft, isRest, done, start, pause, reset } = useTimer(sets, holdSeconds)
+function ExerciseTimer({ sets, holdSeconds, restSeconds }: { sets: number; holdSeconds: number; restSeconds: number }) {
+  const { active, currentSet, secondsLeft, isRest, done, start, pause, reset } = useTimer(sets, holdSeconds, restSeconds)
   const circumference = 2 * Math.PI * 36
-  const total = isRest ? 15 : holdSeconds
+  const total = isRest ? restSeconds : holdSeconds
   const offset = circumference * (1 - secondsLeft / total)
 
   if (done) {
@@ -356,7 +289,7 @@ export default function RoutinePage() {
   const [storedMeta] = useState<RoutineMeta | null>(() => readStoredRoutineMeta())
 
   const routine = useMemo(
-    () => (storedMeta?.routine ? normalizeRoutineForDisplay(storedMeta.routine, storedMeta) : null),
+    () => (storedMeta?.routine ? normalizeRoutineForDisplay(storedMeta.routine) : null),
     [storedMeta],
   )
   const [savedId, setSavedId] = useState<number | null>(() => storedMeta?.routine?.savedId ?? null)
@@ -640,8 +573,16 @@ export default function RoutinePage() {
   const totalSetCount = routine
     ? routine.phases.reduce((sum, phase) => sum + phase.exercises.reduce((phaseSum, exercise) => phaseSum + exercise.sets, 0), 0)
     : 0
-  const requestedDuration = storedMeta?.duration ?? 0
+  const requestedDuration = routine?.plannedDurationMinutes || storedMeta?.duration || 0
   const estimatedDuration = estimateRoutineDurationMinutes(routine)
+  const prepSeconds = routine?.phases
+    .filter((phase) => phase.pillar === 'prep')
+    .reduce((sum, phase) => sum + phase.exercises.reduce(
+      (phaseSum, exercise) => phaseSum + estimateExerciseDurationSeconds(exercise, 'prep'), 0,
+    ), 0) || 0
+  const phaseBudgets = calculatePhaseBudgets(requestedDuration, routine?.prescriptionGoal || storedMeta?.goal || 'balanced', prepSeconds)
+  const withinDurationTarget = requestedDuration > 0
+    && Math.abs(estimatedDuration - requestedDuration) <= requestedDuration * 0.1
   const phaseExerciseCounts = routine
     ? routine.phases.map((phase) => `${phase.pillar}:${phase.exercises.length}`).join(' / ')
     : ''
@@ -861,6 +802,12 @@ export default function RoutinePage() {
                     Requested: <span style={{ color: 'var(--white)' }}>{requestedDuration} min</span>
                     {' / '}Estimated: <span style={{ color: 'var(--white)' }}>{estimatedDuration} min</span>
                     {' / '}Exercises: <span style={{ color: 'var(--white)' }}>{totalExerciseCount}</span>
+                    <br />
+                    Phase budgets: <span style={{ color: 'var(--white)' }}>
+                      prep {(phaseBudgets.prep / 60).toFixed(1)} / release {(phaseBudgets.release / 60).toFixed(1)} / activation {(phaseBudgets.activation / 60).toFixed(1)} / range {(phaseBudgets.range / 60).toFixed(1)} min
+                    </span>
+                    <br />
+                    Within 10%: <span style={{ color: withinDurationTarget ? 'var(--cyan)' : 'var(--white)' }}>{withinDurationTarget ? 'YES' : 'NO'}</span>
                     <br />
                     Phase counts: <span style={{ color: 'var(--white)' }}>{phaseExerciseCounts || 'n/a'}</span>
                   </div>
@@ -1128,7 +1075,7 @@ export default function RoutinePage() {
                           })}
                         </div>
 
-                        {exercise.holdSeconds && <ExerciseTimer sets={exercise.sets} holdSeconds={exercise.holdSeconds} />}
+                        {exercise.holdSeconds && <ExerciseTimer sets={exercise.sets} holdSeconds={exercise.holdSeconds} restSeconds={phase.pillar === 'range' ? 30 : phase.pillar === 'activation' ? 20 : 15} />}
 
                         <div className="mg-mobile-stack" style={{ marginTop: 10 }}>
                           {isDone && (

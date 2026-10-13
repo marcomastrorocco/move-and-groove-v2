@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
 import { readBasicDailyRoutineLimit } from '@/lib/app-config'
 import { CURATED_ROUTINE_LIBRARY } from '@/lib/curated-mobility'
+import { calculatePhaseBudgets, estimatePrescriptionSeconds, scalePrescription } from '@/lib/prescription-scaler'
 import {
   buildApprovedExercisePoolTextFromLibrary,
   ExerciseLibraryUnavailableError,
@@ -130,6 +131,8 @@ type GeneratedRoutine = {
   phases: RoutinePhase[]
   evidenceSummary: string
   savedId?: number
+  plannedDurationMinutes?: number
+  prescriptionGoal?: string
 }
 
 type GenerateRequest = {
@@ -260,25 +263,45 @@ function buildPhaseSlots(goal: string, exerciseTarget: number, areaCount: number
   return slots
 }
 
-const RELEASE_REP_SECONDS = 4
-const ACTIVE_REP_SECONDS = 3.5
-const HOLD_REST_SECONDS = 15
-const REP_REST_SECONDS = 12
-const EXERCISE_SETUP_SECONDS = 15
-
 function estimateExerciseDurationSeconds(
   exercise: Pick<RoutineExercise, 'sets' | 'reps' | 'holdSeconds'>,
   pillar: RoutinePhase['pillar'],
 ) {
-  const setCount = Math.max(exercise.sets, 1)
+  return estimatePrescriptionSeconds(exercise, pillar)
+}
 
-  if (exercise.holdSeconds) {
-    return EXERCISE_SETUP_SECONDS + (setCount * exercise.holdSeconds) + (Math.max(setCount - 1, 0) * HOLD_REST_SECONDS)
+function scaleRoutinePrescriptions(routine: GeneratedRoutine, duration: number, goal: string): GeneratedRoutine {
+  const prep = routine.phases.filter((phase) => phase.pillar === 'prep')
+    .reduce((sum, phase) => sum + phase.exercises.reduce(
+      (phaseSum, exercise) => phaseSum + estimateExerciseDurationSeconds(exercise, 'prep'), 0,
+    ), 0)
+  const budgets = calculatePhaseBudgets(duration, goal, prep)
+  const counts = {
+    release: countExercisesForPillar(routine, 'release'),
+    activation: countExercisesForPillar(routine, 'activation'),
+    range: countExercisesForPillar(routine, 'range'),
   }
+  const position = { release: 0, activation: 0, range: 0 }
 
-  const repCount = Math.max(exercise.reps || 0, 1)
-  const repSeconds = pillar === 'release' ? RELEASE_REP_SECONDS : ACTIVE_REP_SECONDS
-  return EXERCISE_SETUP_SECONDS + (setCount * repCount * repSeconds) + (Math.max(setCount - 1, 0) * REP_REST_SECONDS)
+  return {
+    ...routine,
+    plannedDurationMinutes: duration,
+    prescriptionGoal: goal,
+    phases: routine.phases.map((phase) => {
+      if (phase.pillar === 'prep') return phase
+      const pillar = phase.pillar
+      return {
+        ...phase,
+        exercises: phase.exercises.map((exercise) => {
+          const index = position[pillar]++
+          return {
+            ...exercise,
+            ...scalePrescription(exercise, pillar, budgets[pillar], counts[pillar], index < 2),
+          }
+        }),
+      }
+    }),
+  }
 }
 
 function finalizeGeneratedRoutine({
@@ -308,10 +331,7 @@ function finalizeGeneratedRoutine({
   }
   const mainPhases = parsedRoutine.phases.filter((phase) => phase?.pillar !== 'prep')
   const routine = normalizeRoutineExerciseNames(
-    normalizeRoutineForGoal(
-      { ...parsedRoutine, phases: mainPhases },
-      { goal: effectiveGoal, readiness: effectiveReadiness },
-    ),
+    { ...parsedRoutine, phases: mainPhases },
     targetAreas,
     exerciseLibrary,
   )
@@ -332,12 +352,15 @@ function finalizeGeneratedRoutine({
       const approved = area in exerciseLibrary.routine
         ? exerciseLibrary.routine[area as keyof typeof exerciseLibrary.routine][pillar]
         : []
-      if (!approved.some((candidate) => candidate.name === exercise.name)) {
+      const candidate = approved.find((item) => item.name === exercise.name)
+      if (!candidate) {
         console.warn('[generate.guardrail] rejected AI exercise', {
           name: exercise.name, area, pillar,
         })
         throw new Error('AI routine included an exercise outside the active library')
       }
+      exercise.reps = candidate.reps
+      exercise.holdSeconds = candidate.holdSeconds
     }
   }
 
@@ -350,11 +373,12 @@ function finalizeGeneratedRoutine({
     throw new Error('AI routine failed guardrails')
   }
 
-  if (isRoutineDurationOutsideWindow(routine, sessionDuration)) {
+  const scaledRoutine = scaleRoutinePrescriptions(routine, sessionDuration, effectiveGoal)
+  if (isRoutineDurationOutsideWindow(scaledRoutine, sessionDuration)) {
     throw new Error('AI routine failed duration window')
   }
 
-  return routine
+  return scaledRoutine
 }
 
 async function requestAnthropicRoutineGeneration({
@@ -514,6 +538,23 @@ function estimateTargetMainDurationMinutes(duration: number, prepPhase: RoutineP
   return Math.max(6, duration - prepMinutes)
 }
 
+function estimateScaledMainDurationMinutes(
+  phases: RoutinePhase[],
+  prepPhase: RoutinePhase | null,
+  duration: number,
+  goal: string,
+) {
+  const budgets = calculatePhaseBudgets(duration, goal, estimatePhaseDurationMinutes(prepPhase) * 60)
+  return phases.reduce((total, phase) => {
+    if (phase.pillar === 'prep') return total
+    const pillar = phase.pillar
+    return total + phase.exercises.reduce((sum, exercise, index) => sum + estimatePrescriptionSeconds(
+      scalePrescription(exercise, pillar, budgets[pillar], phase.exercises.length, index < 2),
+      pillar,
+    ), 0) / 60
+  }, 0)
+}
+
 function buildExerciseTargetFromDuration({
   duration,
   goal,
@@ -537,22 +578,6 @@ function isRoutineDurationOutsideWindow(routine: GeneratedRoutine, requestedDura
   return estimatedDuration < lowerBound || estimatedDuration > upperBound
 }
 
-function shouldUseLighterRangeSetScheme(goal: string, readiness: ReadinessAdjustmentSnapshot | null | undefined) {
-  return goal === 'performance'
-    || goal === 'flexibility'
-    || readiness?.modificationMode === 'recovery'
-}
-
-function normalizeRoutineForGoal(
-  routine: GeneratedRoutine,
-  options?: { goal?: string; readiness?: ReadinessAdjustmentSnapshot | null },
-): GeneratedRoutine {
-  return {
-    ...routine,
-    phases: routine.phases.map((phase) => applyFallbackPhaseSetRules(phase, options)),
-  }
-}
-
 function countExercisesForPillar(routine: GeneratedRoutine, pillar: 'release' | 'activation' | 'range') {
   return routine.phases
     .filter((phase) => phase.pillar === pillar)
@@ -567,37 +592,6 @@ function routineTargetsArea(routine: GeneratedRoutine, area: string) {
   return routine.phases.some((phase) =>
     phase.exercises.some((exercise) => exercise.targetArea === area),
   )
-}
-
-function applyFallbackPhaseSetRules(
-  phase: RoutinePhase,
-  options?: { goal?: string; readiness?: ReadinessAdjustmentSnapshot | null },
-): RoutinePhase {
-  const lighterRangeScheme = shouldUseLighterRangeSetScheme(options?.goal || 'balanced', options?.readiness)
-
-  return {
-    ...phase,
-    exercises: phase.exercises.map((exercise, index) => {
-      if (phase.pillar === 'release') {
-        return { ...exercise, sets: 1 }
-      }
-
-      if (phase.pillar === 'activation') {
-        return { ...exercise, sets: index < 2 ? 2 : 1 }
-      }
-
-      if (phase.pillar === 'range') {
-        if (lighterRangeScheme) {
-          const prioritizeTwoRangeDrills = phase.exercises.length >= 4 ? index < 2 : index === 0
-          return { ...exercise, sets: prioritizeTwoRangeDrills ? 2 : 1 }
-        }
-
-        return { ...exercise, sets: 2 }
-      }
-
-      return exercise
-    }),
-  }
 }
 
 function phaseTargetsArea(
@@ -1073,7 +1067,7 @@ function buildFallbackRoutine({
     })
   }
 
-  let currentMainDuration = phases.reduce((sum, phase) => sum + estimatePhaseDurationMinutes(phase), 0)
+  let currentMainDuration = estimateScaledMainDurationMinutes(phases, prepPhase, duration, goal)
   const desiredMainDuration = Math.max(6, targetMainDuration * 0.9)
   let fillIndex = exerciseTarget
   let stalledPasses = 0
@@ -1096,7 +1090,7 @@ function buildFallbackRoutine({
     })
 
     if (added) {
-      currentMainDuration = phases.reduce((sum, phase) => sum + estimatePhaseDurationMinutes(phase), 0)
+      currentMainDuration = estimateScaledMainDurationMinutes(phases, prepPhase, duration, goal)
       stalledPasses = 0
     } else if (!canAddAnyExercise(phases, chosenAreas, pillar, exerciseLibrary)) {
       stalledPasses += areaCycle.length
@@ -1124,14 +1118,14 @@ function buildFallbackRoutine({
 
   const totalExercises = filteredPhases.reduce((sum, phase) => sum + phase.exercises.length, 0)
 
-  return {
+  return scaleRoutinePrescriptions({
     routineTitle: buildRoutineTitle({ mode, sport, chosenAreas, goal }),
     summary: buildRoutineSummary(goal, chosenAreas, sport, mode),
     difficultyLevel: readiness?.modificationMode === 'recovery' ? 'Beginner' : goal === 'performance' ? 'Intermediate' : 'Beginner',
     totalExercises,
-      phases: filteredPhases.map((phase) => applyFallbackPhaseSetRules(phase, { goal, readiness })),
+    phases: filteredPhases,
     evidenceSummary: buildRoutineEvidenceSummary(goal, chosenAreas, readiness),
-  }
+  }, duration, goal)
 }
 
 export async function POST(req: NextRequest) {
@@ -1305,20 +1299,9 @@ ${readinessModifiers.promptGuidance.map((note) => `  - ${note}`).join('\n')}` : 
 SESSION STRUCTURE - THREE PHASES ONLY:
 
 PRESCRIPTION RULES:
-- Isometric and stretch exercises: set holdSeconds to a realistic hold (usually 30-60s) and set reps to null.
-- Movement and rep-based exercises: set reps to a realistic count (usually 6-10) and set holdSeconds to null.
-- Never set holdSeconds to 2 for a rep-based exercise. Controlled tempo belongs in the movement intent, not in holdSeconds.
-- PAILS & RAILS: use holdSeconds (usually 10-20s per contraction) and reps null.
-- CARs: use reps (usually 5-8) and holdSeconds null.
-
-SET ASSIGNMENT RULES:
-- Do not assign sets uniformly across a whole phase.
-- RELEASE: every exercise must be exactly 1 set. Release is for tissue priming, not volume.
-- ACTIVATION: assign 2 sets to the 2 most important activation exercises for the sport or area. Assign 1 set to all remaining activation exercises.
-- RANGE: for normal training sessions, assign 2 sets to every range exercise. Range is the main loading block and should not feel like a long list of one-off drills.
-- RANGE EXCEPTION: for recovery sessions, flexibility/recovery-biased sessions, and pre-game or pre-training prep sessions, you may use more range drills with lighter volume. In those lighter contexts, assign 2 sets to the top 1-2 most important range drills and 1 set to the remaining range drills.
-- The doubled activation exercises should be the ones most directly preparing the dominant movement pattern.
-- In lighter range blocks, the doubled range drill(s) should be the drill(s) requiring the most sport-relevant or end-range neuromuscular adaptation.
+- Set and rep prescriptions will be automatically scaled to fit session duration. Focus on exercise selection only, not prescription values.
+- List the most sport-relevant activation and range drills first; the app may allocate a second set to those primary exercises.
+- Preserve whether an exercise is a movement (reps) or a hold (holdSeconds), following the approved exercise pool. Use the pool's default values as JSON placeholders; the app replaces them after selection.
 
 1. RELEASE - Loosen soft tissue surrounding target joints.
    Use: Static stretches, dynamic stretches, PNF, passive holds, joint distractions.
@@ -1358,14 +1341,14 @@ SET ASSIGNMENT RULES:
 PILLAR WEIGHTING BY GOAL:
 - flexibility  -> 50% release, 25% activation, 25% range
 - strength     -> 25% release, 50% activation, 25% range
-- balanced     -> meaningful release first, then activation and range
+- balanced     -> 40% release, 30% activation, 30% range
 - performance  -> 25% release, 25% activation, 50% range
 
 Create ${exerciseCount} total exercises. Cite REAL peer-reviewed studies (JOSPT, BJSM, JSCR, IJSPT).
 Prioritize the approved exercise pool before inventing new exercise names. Stay close to that movement language and phase logic.
 Use ONLY the exact exercise names from the approved pool. Do not paraphrase, shorten, or rename any exercise.
 Release phase must contain ONLY stretching - no foam rolling.
-Unless the goal is flexibility, release exercises should default to 1 set each so the session can cover more surrounding structures. Only use 2 sets for release when the goal is flexibility.
+The app assigns one set to release exercises after selection.
 Do not use or mention PAILs or RAILs in this standard routine builder.
 For balanced and flexibility sessions, release must be substantial rather than token. Cover multiple structures around the joint, not just one stretch per region.
 For sport relevant balanced sessions, release should usually contain at least 3 exercises when the session length allows it.
