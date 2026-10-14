@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/admin'
 import {
   CURATED_ROUTINE_LIBRARY,
   type CuratedArea,
@@ -31,6 +32,12 @@ export type ExerciseLibrary = {
   routine: Record<ExerciseArea, Record<CuratedPillar, RoutineExerciseTemplate[]>>
   foamRoll: Record<ExerciseArea, RoutineExerciseTemplate[]>
   source: 'supabase' | 'fallback'
+}
+
+export class ExerciseLibraryUnavailableError extends Error {
+  constructor() {
+    super('Exercise library is temporarily unavailable. Please try again.')
+  }
 }
 
 const EMPTY_ROUTINE_LIBRARY = (): ExerciseLibrary['routine'] => ({
@@ -112,33 +119,37 @@ function toTemplate(row: ExerciseRecord): RoutineExerciseTemplate | null {
   }
 }
 
-let cachedLibrary: { expiresAt: number; library: ExerciseLibrary } | null = null
-
-export function invalidateExerciseLibraryCache() {
-  cachedLibrary = null
-}
-
 export async function getActiveExerciseLibrary(client: SupabaseClient): Promise<ExerciseLibrary> {
-  if (cachedLibrary && cachedLibrary.expiresAt > Date.now()) {
-    return cachedLibrary.library
+  let data: ExerciseRecord[] | null = null
+  try {
+    const result = await client
+      .from('exercises')
+      .select('id, name, area, phase, sets, reps, hold_seconds, movement_pattern, anatomical_quadrants, rationale, study_citation, aliases, youtube_id, is_active')
+      .eq('is_active', true)
+      .order('area')
+      .order('phase')
+      .order('name')
+      .abortSignal(AbortSignal.timeout(10000))
+    if (result.error) throw result.error
+    data = result.data as ExerciseRecord[] | null
+  } catch (error) {
+    console.error('[exercise-library] Supabase read failed', error)
+    throw new ExerciseLibraryUnavailableError()
   }
 
-  const { data, error } = await client
-    .from('exercises')
-    .select('id, name, area, phase, sets, reps, hold_seconds, movement_pattern, anatomical_quadrants, rationale, study_citation, aliases, youtube_id, is_active')
-    .eq('is_active', true)
-    .order('area')
-    .order('phase')
-    .order('name')
-
-  if (error || !data || data.length === 0) {
+  if (!data) {
+    console.error('[exercise-library] Supabase returned no result data')
+    throw new ExerciseLibraryUnavailableError()
+  }
+  if (data.length === 0) {
+    console.warn('[exercise-library] No active rows; using hardcoded fallback library')
     return copyFallbackLibrary()
   }
 
   const routine = EMPTY_ROUTINE_LIBRARY()
   const foamRoll: ExerciseLibrary['foamRoll'] = { hips: [], shoulders: [], spine: [] }
 
-  for (const rawRow of data as ExerciseRecord[]) {
+  for (const rawRow of data) {
     const template = toTemplate(rawRow)
     if (!template) continue
     if (rawRow.phase === 'foam_roll') {
@@ -148,15 +159,17 @@ export async function getActiveExerciseLibrary(client: SupabaseClient): Promise<
     }
   }
 
-  const hasCompleteRoutineLibrary = (Object.values(routine) as Array<Record<CuratedPillar, RoutineExerciseTemplate[]>>)
-    .every((area) => area.release.length > 0 && area.activation.length > 0 && area.range.length > 0)
-  if (!hasCompleteRoutineLibrary) {
-    return copyFallbackLibrary()
-  }
+  return { routine, foamRoll, source: 'supabase' }
+}
 
-  const library: ExerciseLibrary = { routine, foamRoll, source: 'supabase' }
-  cachedLibrary = { library, expiresAt: Date.now() + 5 * 60 * 1000 }
-  return library
+export async function getActiveExerciseLibraryForGeneration() {
+  try {
+    return await getActiveExerciseLibrary(createServiceRoleClient())
+  } catch (error) {
+    if (error instanceof ExerciseLibraryUnavailableError) throw error
+    console.error('[exercise-library] Server-side reader unavailable', error)
+    throw new ExerciseLibraryUnavailableError()
+  }
 }
 
 export function buildApprovedExercisePoolTextFromLibrary(targetAreas: string[], library: ExerciseLibrary) {

@@ -1,5 +1,6 @@
 ﻿import { createClient } from '@supabase/supabase-js'
 import { NextRequest } from 'next/server'
+import 'server-only'
 
 function readEnv(name: string) {
   const value = process.env[name]
