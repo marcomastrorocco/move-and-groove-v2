@@ -6,6 +6,7 @@ import Header from '@/components/Header'
 import PostSessionCheckinModal from '@/components/PostSessionCheckinModal'
 import PreSessionReadinessModal from '@/components/PreSessionReadinessModal'
 import { getExerciseVideo, getExerciseVideoEmbedUrl, getExerciseVideoWatchUrl } from '@/lib/exercise-videos'
+import type { GenerationSource } from '@/lib/generation-source'
 import type { ReadinessAdjustmentSnapshot } from '@/lib/readiness'
 import { pickRoutineBackground } from '@/lib/routine-backgrounds'
 import { MAX_SAVED_WORKOUTS, isWorkoutSaved, saveWorkoutToLibrary } from '@/lib/saved-workouts'
@@ -33,7 +34,7 @@ type Phase = {
 type Routine = {
   routineTitle: string
   summary: string
-  generationWarning?: string
+  generationSource?: GenerationSource
   difficultyLevel: string
   totalExercises: number
   phases: Phase[]
@@ -355,6 +356,7 @@ export default function RoutinePage() {
     [storedMeta],
   )
   const [savedId, setSavedId] = useState<number | null>(() => storedMeta?.routine?.savedId ?? null)
+  const [isAdmin, setIsAdmin] = useState(false)
   const [isSavedToLibrary, setIsSavedToLibrary] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -378,6 +380,26 @@ export default function RoutinePage() {
       router.push('/quiz')
     }
   }, [routine, router])
+
+  useEffect(() => {
+    let mounted = true
+
+    async function checkAdmin() {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) return
+
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('is_admin')
+        .eq('id', session.user.id)
+        .maybeSingle()
+
+      if (mounted && !error) setIsAdmin(profile?.is_admin === true)
+    }
+
+    void checkAdmin()
+    return () => { mounted = false }
+  }, [supabase])
 
   useEffect(() => {
     setActivePhaseIndex(0)
@@ -805,10 +827,10 @@ export default function RoutinePage() {
 
       <main style={{ position: 'relative', zIndex: 2, paddingTop: 64 }}>
         <div className="mg-page-shell routine-page-shell" style={{ maxWidth: 980 }}>
-          {routine.generationWarning && (
-            <div role="status" style={{ marginBottom: 20, padding: 16, border: '1px solid rgba(255, 195, 96, 0.45)', color: '#ffd49d', background: 'rgba(255, 195, 96, 0.09)' }}>
-              {routine.generationWarning}
-            </div>
+          {isAdmin && routine.generationSource === 'curated_fallback' && (
+            <span style={{ display: 'inline-block', marginBottom: 16, padding: '4px 8px', border: '1px solid rgba(255, 195, 96, 0.45)', color: '#ffd49d', background: 'rgba(255, 195, 96, 0.09)', fontFamily: "'DM Mono',monospace", fontSize: 10, letterSpacing: 1 }}>
+              CURATED FALLBACK
+            </span>
           )}
           <div className="mg-split-section routine-hero-shell" style={{ alignItems: 'flex-start', marginBottom: 48, paddingBottom: 32, borderBottom: '1px solid var(--border)', gap: 24 }}>
             <div>

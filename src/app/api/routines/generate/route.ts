@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js'
 import { CLAUDE_MODEL } from '@/lib/ai-models'
 import { readBasicDailyRoutineLimit } from '@/lib/app-config'
 import { CURATED_ROUTINE_LIBRARY } from '@/lib/curated-mobility'
+import type { GenerationSource } from '@/lib/generation-source'
 import {
   buildApprovedExercisePoolTextFromLibrary,
   getActiveExerciseLibrary,
@@ -42,7 +43,6 @@ type AiRoutineModelConfig = {
 }
 
 const DEFAULT_OPENAI_PRIMARY_ROUTINE_MODEL = 'gpt-4o-mini'
-const CURATED_FALLBACK_WARNING = 'AI generation is unavailable right now. We created a complete curated routine instead.'
 const AI_ATTEMPT_DEADLINE_MS = 14000
 
 function buildAiRoutineModelSequence({
@@ -893,6 +893,7 @@ async function persistGeneratedRoutine({
   supabaseClient,
   userId,
   routine,
+  generationSource,
   sport,
   areas,
   duration,
@@ -901,6 +902,7 @@ async function persistGeneratedRoutine({
   supabaseClient: ReturnType<typeof createAccessTokenClient>
   userId: string
   routine: GeneratedRoutine
+  generationSource: GenerationSource
   sport: string | null
   areas: string[]
   duration: number
@@ -918,6 +920,7 @@ async function persistGeneratedRoutine({
       difficulty: routine.difficultyLevel,
       summary: routine.summary,
       evidence_summary: routine.evidenceSummary,
+      generation_source: generationSource,
     }])
     .select('id')
     .single<{ id: number }>()
@@ -956,6 +959,7 @@ async function maybePersistRoutineForAuthenticatedUser({
   authenticatedUserId,
   authenticatedSupabase,
   routine,
+  generationSource,
   sport,
   targetAreas,
   sessionDuration,
@@ -964,13 +968,14 @@ async function maybePersistRoutineForAuthenticatedUser({
   authenticatedUserId: string | null
   authenticatedSupabase: ReturnType<typeof createAccessTokenClient> | null
   routine: GeneratedRoutine
+  generationSource: GenerationSource
   sport: string | null
   targetAreas: string[]
   sessionDuration: number
   effectiveGoal: string
 }) {
   if (!authenticatedUserId || !authenticatedSupabase) {
-    return routine
+    return { ...routine, generationSource }
   }
 
   try {
@@ -978,19 +983,20 @@ async function maybePersistRoutineForAuthenticatedUser({
       supabaseClient: authenticatedSupabase,
       userId: authenticatedUserId,
       routine,
+      generationSource,
       sport,
       areas: targetAreas,
       duration: sessionDuration,
       goal: effectiveGoal,
     })
 
-    return { ...routine, savedId }
+    return { ...routine, generationSource, savedId }
   } catch (error) {
     // Saving is an enhancement. The routine itself is fully usable from the
     // response/local storage even when an older Supabase project has not yet
     // created routines or routine_items.
     console.warn('[generate.persistRoutine]', error)
-    return routine
+    return { ...routine, generationSource }
   }
 }
 
@@ -1257,12 +1263,12 @@ export async function POST(req: NextRequest) {
           authenticatedUserId,
           authenticatedSupabase,
           routine: fallbackRoutine,
+          generationSource: 'curated_fallback',
           sport,
           targetAreas,
           sessionDuration,
           effectiveGoal,
         })),
-        generationWarning: CURATED_FALLBACK_WARNING,
       })
     }
 
@@ -1458,6 +1464,7 @@ Respond ONLY in valid JSON (no markdown):
           authenticatedUserId,
           authenticatedSupabase,
           routine: generated.routine,
+          generationSource: generated.provider === 'openai' ? 'openai' : 'claude',
           sport,
           targetAreas,
           sessionDuration,
@@ -1484,12 +1491,12 @@ Respond ONLY in valid JSON (no markdown):
         authenticatedUserId,
         authenticatedSupabase,
         routine: fallbackRoutine,
+        generationSource: 'curated_fallback',
         sport,
         targetAreas,
         sessionDuration,
         effectiveGoal,
       })),
-      generationWarning: CURATED_FALLBACK_WARNING,
     })
 
   } catch (err: unknown) {
