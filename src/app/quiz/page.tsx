@@ -91,9 +91,10 @@ export default function QuizPage() {
       readiness: readTodayPreSessionReadiness(),
     }
 
+    const controller = new AbortController()
+    const timeoutId = window.setTimeout(() => controller.abort(), ROUTINE_GENERATION_TIMEOUT_MS)
+
     try {
-      const controller = new AbortController()
-      const timeoutId = window.setTimeout(() => controller.abort('Routine generation timed out.'), ROUTINE_GENERATION_TIMEOUT_MS)
       const response = await fetch(`${API}/routines/generate`, {
         method: 'POST',
         headers: {
@@ -103,8 +104,6 @@ export default function QuizPage() {
         body: JSON.stringify(payload),
         signal: controller.signal,
       })
-      window.clearTimeout(timeoutId)
-
       if (response.status === 429) {
         const payload = await response.json().catch(() => null)
         if (payload?.error === 'DAILY_LIMIT_REACHED') {
@@ -141,8 +140,10 @@ export default function QuizPage() {
     } catch (err: unknown) {
       console.error('Generation error:', err)
       const message = err instanceof Error ? err.message : 'Failed to connect to server'
-      setError(isAbortLikeError(err) ? 'Routine generation took too long. Please try again.' : message)
+      setError(controller.signal.aborted || isAbortLikeError(err) ? 'Routine generation took too long. Please try again.' : message)
       setLoading(false)
+    } finally {
+      window.clearTimeout(timeoutId)
     }
   }
 

@@ -43,6 +43,7 @@ type AiRoutineModelConfig = {
 
 const DEFAULT_OPENAI_PRIMARY_ROUTINE_MODEL = 'gpt-4o-mini'
 const CURATED_FALLBACK_WARNING = 'AI generation is unavailable right now. We created a complete curated routine instead.'
+const AI_ATTEMPT_DEADLINE_MS = 14000
 
 function buildAiRoutineModelSequence({
   hasOpenAiKey,
@@ -338,19 +339,17 @@ async function requestAnthropicRoutineGeneration({
   sessionDuration: number
   exerciseLibrary: ExerciseLibrary
 }): Promise<GeneratedRoutineSuccess> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), modelConfig.timeoutMs)
+
   try {
-    const message = await Promise.race([
-      anthropic.messages.create({
-        model: CLAUDE_MODEL,
-        max_tokens: 8000,
-        thinking: { type: 'between_tools' },
-        output_config: { effort: 'high' },
-        messages: [{ role: 'user', content: prompt }],
-      }),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Anthropic request timed out (${CLAUDE_MODEL})`)), modelConfig.timeoutMs)
-      }),
-    ])
+    const message = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 8000,
+      thinking: { type: 'between_tools' },
+      output_config: { effort: 'high' },
+      messages: [{ role: 'user', content: prompt }],
+    }, { signal: controller.signal, maxRetries: 0 })
 
     if (message.stop_reason === 'refusal' || message.stop_reason === 'max_tokens') {
       throw new Error(`Anthropic response stopped before a complete routine (${message.stop_reason}).`)
@@ -396,9 +395,13 @@ async function requestAnthropicRoutineGeneration({
       model: CLAUDE_MODEL,
       status: typeof failure?.status === 'number' ? failure.status : null,
       type: errorType,
-      message: typeof failure?.message === 'string' ? failure.message : 'Unknown Anthropic error',
+      message: controller.signal.aborted
+        ? `Anthropic request timed out (${CLAUDE_MODEL})`
+        : typeof failure?.message === 'string' ? failure.message : 'Unknown Anthropic error',
     })
-    throw error
+    throw controller.signal.aborted ? new Error(`Anthropic request timed out (${CLAUDE_MODEL})`) : error
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -435,7 +438,6 @@ async function requestOpenAiRoutineGeneration({
       },
       body: JSON.stringify({
         model: modelConfig.model,
-        reasoning: { effort: 'minimal' },
         input: prompt,
       }),
       signal: controller.signal,
@@ -1125,6 +1127,7 @@ function buildFallbackRoutine({
 }
 
 export async function POST(req: NextRequest) {
+  const aiAttemptDeadlineAt = Date.now() + AI_ATTEMPT_DEADLINE_MS
   let userId: string | null = null
   let mode: 'sport' | 'area' = 'area'
   let sport: string | null = null
@@ -1411,11 +1414,22 @@ Respond ONLY in valid JSON (no markdown):
     let lastAiError: unknown = null
 
     for (const modelConfig of modelSequence) {
+      const remainingMs = aiAttemptDeadlineAt - Date.now()
+      if (remainingMs <= 0) {
+        console.warn('[generate.ai] AI time budget exhausted; returning curated fallback routine')
+        break
+      }
+
+      const boundedModelConfig = {
+        ...modelConfig,
+        timeoutMs: Math.min(modelConfig.timeoutMs, remainingMs),
+      }
+
       try {
         const generated = modelConfig.provider === 'openai'
           ? await requestOpenAiRoutineGeneration({
               apiKey: openAiApiKey!,
-              modelConfig,
+              modelConfig: boundedModelConfig,
               prompt,
               prepPhase,
               targetAreas,
@@ -1426,7 +1440,7 @@ Respond ONLY in valid JSON (no markdown):
             })
           : await requestAnthropicRoutineGeneration({
               anthropic: anthropic!,
-              modelConfig,
+              modelConfig: boundedModelConfig,
               prompt,
               prepPhase,
               targetAreas,
