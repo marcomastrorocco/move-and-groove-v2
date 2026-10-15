@@ -33,6 +33,7 @@ type Phase = {
 type Routine = {
   routineTitle: string
   summary: string
+  generationWarning?: string
   difficultyLevel: string
   totalExercises: number
   phases: Phase[]
@@ -804,6 +805,11 @@ export default function RoutinePage() {
 
       <main style={{ position: 'relative', zIndex: 2, paddingTop: 64 }}>
         <div className="mg-page-shell routine-page-shell" style={{ maxWidth: 980 }}>
+          {routine.generationWarning && (
+            <div role="status" style={{ marginBottom: 20, padding: 16, border: '1px solid rgba(255, 195, 96, 0.45)', color: '#ffd49d', background: 'rgba(255, 195, 96, 0.09)' }}>
+              {routine.generationWarning}
+            </div>
+          )}
           <div className="mg-split-section routine-hero-shell" style={{ alignItems: 'flex-start', marginBottom: 48, paddingBottom: 32, borderBottom: '1px solid var(--border)', gap: 24 }}>
             <div>
               <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 9, letterSpacing: 4, color: 'var(--cyan)', marginBottom: 12, textTransform: 'uppercase' }}>

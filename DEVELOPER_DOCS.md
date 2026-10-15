@@ -90,23 +90,21 @@ Primary route:
 
 Current sequence:
 
-1. OpenAI primary
-2. Anthropic fallback
-3. curated fallback
+1. OpenAI primary when configured
+2. Claude Sonnet fallback (or primary when OpenAI is absent)
+3. curated fallback with a visible warning when AI is unavailable
 
 Current defaults:
 
 - OpenAI primary: `gpt-4o-mini`
-- Anthropic primary fallback: `claude-3-5-haiku-20241022`
-- Anthropic premium fallback: `claude-sonnet-4-20250514`
+- Anthropic model: `claude-sonnet-5-5` by default
 
 Relevant env vars:
 
 - `OPENAI_API_KEY`
 - `ANTHROPIC_API_KEY`
 - `OPENAI_ROUTINE_PRIMARY_MODEL`
-- `ANTHROPIC_ROUTINE_PRIMARY_MODEL`
-- `ANTHROPIC_ROUTINE_FALLBACK_MODEL`
+- `ANTHROPIC_MODEL` (optional override for the single Anthropic model)
 
 Important truth:
 
