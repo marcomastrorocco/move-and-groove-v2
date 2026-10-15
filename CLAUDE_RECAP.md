@@ -25,16 +25,14 @@ Routine generation is now cheap-model first, not premium-model always.
 
 Current order:
 
-1. `gpt-4o-mini`
-2. Anthropic primary fallback
-3. Anthropic premium fallback
-4. curated fallback
+1. `gpt-4o-mini` when OpenAI is configured
+2. Claude Sonnet when Anthropic is configured (primary if OpenAI is absent)
+3. curated fallback, with a visible warning if AI is unavailable
 
 Current defaults in code:
 
 - OpenAI primary: `gpt-4o-mini`
-- Anthropic primary fallback: `claude-3-5-haiku-20241022`
-- Anthropic premium fallback: `claude-sonnet-4-20250514`
+- Anthropic model: `claude-sonnet-5-5` by default, overridable with `ANTHROPIC_MODEL`
 
 Important file:
 

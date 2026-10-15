@@ -1,8 +1,10 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
+import { CLAUDE_MODEL } from '@/lib/ai-models'
 import { readBasicDailyRoutineLimit } from '@/lib/app-config'
 import { CURATED_ROUTINE_LIBRARY } from '@/lib/curated-mobility'
+import type { GenerationSource } from '@/lib/generation-source'
 import {
   buildApprovedExercisePoolTextFromLibrary,
   getActiveExerciseLibrary,
@@ -41,8 +43,7 @@ type AiRoutineModelConfig = {
 }
 
 const DEFAULT_OPENAI_PRIMARY_ROUTINE_MODEL = 'gpt-4o-mini'
-const DEFAULT_ANTHROPIC_PRIMARY_ROUTINE_MODEL = 'claude-3-5-haiku-20241022'
-const DEFAULT_ANTHROPIC_FALLBACK_ROUTINE_MODEL = 'claude-sonnet-4-20250514'
+const AI_ATTEMPT_DEADLINE_MS = 14000
 
 function buildAiRoutineModelSequence({
   hasOpenAiKey,
@@ -63,14 +64,14 @@ function buildAiRoutineModelSequence({
   } else if (hasAnthropicKey) {
     sequence.push({
       provider: 'anthropic',
-      model: readOptionalEnv('ANTHROPIC_ROUTINE_PRIMARY_MODEL') || DEFAULT_ANTHROPIC_PRIMARY_ROUTINE_MODEL,
+      model: CLAUDE_MODEL,
       tier: 'primary',
-      timeoutMs: 12000,
+      timeoutMs: 60000,
     })
   }
 
   if (hasAnthropicKey) {
-    const fallbackModel = readOptionalEnv('ANTHROPIC_ROUTINE_FALLBACK_MODEL') || DEFAULT_ANTHROPIC_FALLBACK_ROUTINE_MODEL
+    const fallbackModel = CLAUDE_MODEL
     const alreadyIncluded = sequence.some((config) => config.provider === 'anthropic' && config.model === fallbackModel)
 
     if (!alreadyIncluded) {
@@ -78,7 +79,7 @@ function buildAiRoutineModelSequence({
         provider: 'anthropic',
         model: fallbackModel,
         tier: 'fallback',
-        timeoutMs: 20000,
+        timeoutMs: 60000,
       })
     }
   }
@@ -175,11 +176,6 @@ async function validateAuthenticatedUser(req: NextRequest, requestedUserId: stri
 }
 
 type CuratedPillar = 'release' | 'activation' | 'range'
-
-type MessageBlock = {
-  type: string
-  text?: string
-}
 
 type GeneratedRoutineSuccess = {
   routine: GeneratedRoutine
@@ -343,41 +339,69 @@ async function requestAnthropicRoutineGeneration({
   sessionDuration: number
   exerciseLibrary: ExerciseLibrary
 }): Promise<GeneratedRoutineSuccess> {
-  const message = await Promise.race([
-    anthropic.messages.create({
-      model: modelConfig.model,
-      max_tokens: 4000,
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), modelConfig.timeoutMs)
+
+  try {
+    const message = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 8000,
+      thinking: { type: 'between_tools' },
+      output_config: { effort: 'high' },
       messages: [{ role: 'user', content: prompt }],
-    }),
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Anthropic request timed out (${modelConfig.model})`)), modelConfig.timeoutMs)
-    }),
-  ])
+    }, { signal: controller.signal, maxRetries: 0 })
 
-  const raw = (message.content as MessageBlock[]).map((block) => block.text || '').join('')
-  const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-  const jsonStart = cleaned.indexOf('{')
-  const jsonEnd = cleaned.lastIndexOf('}')
+    if (message.stop_reason === 'refusal' || message.stop_reason === 'max_tokens') {
+      throw new Error(`Anthropic response stopped before a complete routine (${message.stop_reason}).`)
+    }
 
-  if (jsonStart === -1 || jsonEnd === -1) {
-    throw new Error(`AI returned non-JSON response (${modelConfig.model}): ${cleaned.slice(0, 200)}`)
-  }
+    const raw = message.content.map((block) => block.type === 'text' ? block.text : '').join('')
+    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+    const jsonStart = cleaned.indexOf('{')
+    const jsonEnd = cleaned.lastIndexOf('}')
 
-  const routine = finalizeGeneratedRoutine({
-    rawJson: cleaned.slice(jsonStart, jsonEnd + 1),
-    prepPhase,
-    targetAreas,
-    effectiveGoal,
-    effectiveReadiness,
-    sessionDuration,
-    exerciseLibrary,
-  })
+    if (jsonStart === -1 || jsonEnd === -1) {
+      throw new Error('Anthropic returned a response without a complete routine JSON object.')
+    }
 
-  return {
-    routine,
-    provider: 'anthropic',
-    model: modelConfig.model,
-    tier: modelConfig.tier,
+    const routine = finalizeGeneratedRoutine({
+      rawJson: cleaned.slice(jsonStart, jsonEnd + 1),
+      prepPhase,
+      targetAreas,
+      effectiveGoal,
+      effectiveReadiness,
+      sessionDuration,
+      exerciseLibrary,
+    })
+
+    return {
+      routine,
+      provider: 'anthropic',
+      model: CLAUDE_MODEL,
+      tier: modelConfig.tier,
+    }
+  } catch (error) {
+    const failure = error && typeof error === 'object' ? error as {
+      status?: unknown
+      type?: unknown
+      error?: { type?: unknown; error?: { type?: unknown } }
+      name?: unknown
+      message?: unknown
+    } : null
+    const errorType = [failure?.type, failure?.error?.error?.type, failure?.error?.type, failure?.name]
+      .find((value): value is string => typeof value === 'string') || 'unknown'
+    console.error('[generate.anthropic]', {
+      route: '/api/routines/generate',
+      model: CLAUDE_MODEL,
+      status: typeof failure?.status === 'number' ? failure.status : null,
+      type: errorType,
+      message: controller.signal.aborted
+        ? `Anthropic request timed out (${CLAUDE_MODEL})`
+        : typeof failure?.message === 'string' ? failure.message : 'Unknown Anthropic error',
+    })
+    throw controller.signal.aborted ? new Error(`Anthropic request timed out (${CLAUDE_MODEL})`) : error
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -414,7 +438,6 @@ async function requestOpenAiRoutineGeneration({
       },
       body: JSON.stringify({
         model: modelConfig.model,
-        reasoning: { effort: 'minimal' },
         input: prompt,
       }),
       signal: controller.signal,
@@ -855,9 +878,12 @@ function normalizeRoutineExerciseNames(routine: GeneratedRoutine, targetAreas: s
       ...phase,
       exercises: phase.exercises.map((exercise) => {
         const canonicalName = approvedMap.get(normalizeExerciseName(exercise.name))
-        return canonicalName
-          ? { ...exercise, name: canonicalName }
-          : exercise
+        const canonicalArea = targetAreas.find((area) => exercise.targetArea.toLowerCase().startsWith(area))
+        return {
+          ...exercise,
+          name: canonicalName || exercise.name,
+          targetArea: canonicalArea || exercise.targetArea,
+        }
       }),
     })),
   }
@@ -867,6 +893,7 @@ async function persistGeneratedRoutine({
   supabaseClient,
   userId,
   routine,
+  generationSource,
   sport,
   areas,
   duration,
@@ -875,6 +902,7 @@ async function persistGeneratedRoutine({
   supabaseClient: ReturnType<typeof createAccessTokenClient>
   userId: string
   routine: GeneratedRoutine
+  generationSource: GenerationSource
   sport: string | null
   areas: string[]
   duration: number
@@ -892,6 +920,7 @@ async function persistGeneratedRoutine({
       difficulty: routine.difficultyLevel,
       summary: routine.summary,
       evidence_summary: routine.evidenceSummary,
+      generation_source: generationSource,
     }])
     .select('id')
     .single<{ id: number }>()
@@ -930,6 +959,7 @@ async function maybePersistRoutineForAuthenticatedUser({
   authenticatedUserId,
   authenticatedSupabase,
   routine,
+  generationSource,
   sport,
   targetAreas,
   sessionDuration,
@@ -938,13 +968,14 @@ async function maybePersistRoutineForAuthenticatedUser({
   authenticatedUserId: string | null
   authenticatedSupabase: ReturnType<typeof createAccessTokenClient> | null
   routine: GeneratedRoutine
+  generationSource: GenerationSource
   sport: string | null
   targetAreas: string[]
   sessionDuration: number
   effectiveGoal: string
 }) {
   if (!authenticatedUserId || !authenticatedSupabase) {
-    return routine
+    return { ...routine, generationSource }
   }
 
   try {
@@ -952,19 +983,20 @@ async function maybePersistRoutineForAuthenticatedUser({
       supabaseClient: authenticatedSupabase,
       userId: authenticatedUserId,
       routine,
+      generationSource,
       sport,
       areas: targetAreas,
       duration: sessionDuration,
       goal: effectiveGoal,
     })
 
-    return { ...routine, savedId }
+    return { ...routine, generationSource, savedId }
   } catch (error) {
     // Saving is an enhancement. The routine itself is fully usable from the
     // response/local storage even when an older Supabase project has not yet
     // created routines or routine_items.
     console.warn('[generate.persistRoutine]', error)
-    return routine
+    return { ...routine, generationSource }
   }
 }
 
@@ -1101,6 +1133,7 @@ function buildFallbackRoutine({
 }
 
 export async function POST(req: NextRequest) {
+  const aiAttemptDeadlineAt = Date.now() + AI_ATTEMPT_DEADLINE_MS
   let userId: string | null = null
   let mode: 'sport' | 'area' = 'area'
   let sport: string | null = null
@@ -1225,15 +1258,18 @@ export async function POST(req: NextRequest) {
 
     if (modelSequence.length === 0) {
       console.error('[generate.env] Missing OPENAI_API_KEY and ANTHROPIC_API_KEY. Returning curated fallback routine.')
-      return NextResponse.json(await maybePersistRoutineForAuthenticatedUser({
-        authenticatedUserId,
-        authenticatedSupabase,
-        routine: fallbackRoutine,
-        sport,
-        targetAreas,
-        sessionDuration,
-        effectiveGoal,
-      }))
+      return NextResponse.json({
+        ...(await maybePersistRoutineForAuthenticatedUser({
+          authenticatedUserId,
+          authenticatedSupabase,
+          routine: fallbackRoutine,
+          generationSource: 'curated_fallback',
+          sport,
+          targetAreas,
+          sessionDuration,
+          effectiveGoal,
+        })),
+      })
     }
 
     const aiDuration = estimateTargetMainDurationMinutes(sessionDuration, prepPhase)
@@ -1329,6 +1365,7 @@ PILLAR WEIGHTING BY GOAL:
 Create ${exerciseCount} total exercises. Cite REAL peer-reviewed studies (JOSPT, BJSM, JSCR, IJSPT).
 Prioritize the approved exercise pool before inventing new exercise names. Stay close to that movement language and phase logic.
 Use ONLY the exact exercise names from the approved pool. Do not paraphrase, shorten, or rename any exercise.
+For every exercise, targetArea must be exactly one of: ${areasText}. Do not add anatomy descriptions to targetArea.
 Release phase must contain ONLY stretching - no foam rolling.
 Unless the goal is flexibility, release exercises should default to 1 set each so the session can cover more surrounding structures. Only use 2 sets for release when the goal is flexibility.
 Do not use or mention PAILs or RAILs in this standard routine builder.
@@ -1383,11 +1420,22 @@ Respond ONLY in valid JSON (no markdown):
     let lastAiError: unknown = null
 
     for (const modelConfig of modelSequence) {
+      const remainingMs = aiAttemptDeadlineAt - Date.now()
+      if (remainingMs <= 0) {
+        console.warn('[generate.ai] AI time budget exhausted; returning curated fallback routine')
+        break
+      }
+
+      const boundedModelConfig = {
+        ...modelConfig,
+        timeoutMs: Math.min(modelConfig.timeoutMs, remainingMs),
+      }
+
       try {
         const generated = modelConfig.provider === 'openai'
           ? await requestOpenAiRoutineGeneration({
               apiKey: openAiApiKey!,
-              modelConfig,
+              modelConfig: boundedModelConfig,
               prompt,
               prepPhase,
               targetAreas,
@@ -1398,7 +1446,7 @@ Respond ONLY in valid JSON (no markdown):
             })
           : await requestAnthropicRoutineGeneration({
               anthropic: anthropic!,
-              modelConfig,
+              modelConfig: boundedModelConfig,
               prompt,
               prepPhase,
               targetAreas,
@@ -1416,6 +1464,7 @@ Respond ONLY in valid JSON (no markdown):
           authenticatedUserId,
           authenticatedSupabase,
           routine: generated.routine,
+          generationSource: generated.provider === 'openai' ? 'openai' : 'claude',
           sport,
           targetAreas,
           sessionDuration,
@@ -1423,7 +1472,9 @@ Respond ONLY in valid JSON (no markdown):
         }))
       } catch (error) {
         lastAiError = error
-        if (modelConfig.tier === 'primary') {
+        if (modelConfig.provider === 'anthropic') {
+          console.warn(`[generate.ai] Anthropic ${modelConfig.tier} failed; trying the next available option.`)
+        } else if (modelConfig.tier === 'primary') {
           console.warn(`[generate.ai] primary model failed (${modelConfig.provider}:${modelConfig.model}), escalating to fallback`, error)
         } else {
           console.error(`[generate.ai] fallback model failed (${modelConfig.provider}:${modelConfig.model})`, error)
@@ -1435,15 +1486,18 @@ Respond ONLY in valid JSON (no markdown):
       console.warn('[generate.ai] all AI models failed, returning curated fallback routine')
     }
 
-    return NextResponse.json(await maybePersistRoutineForAuthenticatedUser({
-      authenticatedUserId,
-      authenticatedSupabase,
-      routine: fallbackRoutine,
-      sport,
-      targetAreas,
-      sessionDuration,
-      effectiveGoal,
-    }))
+    return NextResponse.json({
+      ...(await maybePersistRoutineForAuthenticatedUser({
+        authenticatedUserId,
+        authenticatedSupabase,
+        routine: fallbackRoutine,
+        generationSource: 'curated_fallback',
+        sport,
+        targetAreas,
+        sessionDuration,
+        effectiveGoal,
+      })),
+    })
 
   } catch (err: unknown) {
     console.error('[generate]', err)

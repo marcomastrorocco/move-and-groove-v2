@@ -1,4 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
+import { isGenerationSource, type GenerationSource } from '@/lib/generation-source'
 import { createAccessTokenClient, createAuthClient } from '@/lib/supabase/admin'
 
 type RoutineExercise = {
@@ -22,6 +23,7 @@ type RoutinePhase = {
 type Routine = {
   routineTitle: string
   summary: string
+  generationSource?: GenerationSource
   difficultyLevel: string
   totalExercises: number
   phases: RoutinePhase[]
@@ -78,6 +80,10 @@ export async function POST(req: NextRequest) {
     }
 
     const targetAreas = areas && areas.length > 0 ? areas : ['hips', 'shoulders', 'spine']
+    // Routines cached before source tracking have no provenance to carry forward.
+    const generationSource = isGenerationSource(routine.generationSource)
+      ? routine.generationSource
+      : 'curated_fallback'
 
     const { data: savedRoutine, error: routineError } = await supabase
       .from('routines')
@@ -91,6 +97,7 @@ export async function POST(req: NextRequest) {
         difficulty: routine.difficultyLevel,
         summary: routine.summary,
         evidence_summary: routine.evidenceSummary,
+        generation_source: generationSource,
       }])
       .select()
       .single()

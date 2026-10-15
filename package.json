@@ -12,7 +12,7 @@
     "healthcheck": "npm run lint && npm run typecheck && npm run archcheck && npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.80.0",
+    "@anthropic-ai/sdk": "^0.133.0",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.100.1",
     "next": "16.2.1",

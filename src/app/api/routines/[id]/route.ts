@@ -1,4 +1,5 @@
 ﻿import { NextRequest, NextResponse } from 'next/server'
+import { isGenerationSource } from '@/lib/generation-source'
 import { createAccessTokenClient, createAuthClient } from '@/lib/supabase/admin'
 
 type RoutineItemRow = {
@@ -67,7 +68,7 @@ export async function GET(
 
     const { data: routineRow, error: routineError } = await supabase
       .from('routines')
-      .select('id,title,sport,areas,duration_minutes,goal,difficulty,summary,evidence_summary')
+      .select('*')
       .eq('id', routineId)
       .eq('user_id', userId)
       .maybeSingle<{
@@ -80,6 +81,7 @@ export async function GET(
         difficulty: string | null
         summary: string | null
         evidence_summary: string | null
+        generation_source?: string | null
       }>()
 
     if (routineError) {
@@ -140,6 +142,7 @@ export async function GET(
         totalExercises: phases.reduce((sum, phase) => sum + phase.exercises.length, 0),
         phases,
         evidenceSummary: routineRow.evidence_summary || '',
+        generationSource: isGenerationSource(routineRow.generation_source) ? routineRow.generation_source : undefined,
         savedId: routineRow.id,
       },
       sport: routineRow.sport,
